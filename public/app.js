@@ -193,7 +193,7 @@ const I = {
 
 // ================= Экран настройки =================
 function renderSetup() {
-  const roles = { dad: 'Глава семьи', daughter: 'Дочь', son: 'Сын' };
+  const roles = { dad: 'Папа', daughter: 'Ника', son: 'Денис' };
   root.innerHTML = `
   <div class="center-screen"><div class="login">
     <div class="brand">${I.house}</div>
