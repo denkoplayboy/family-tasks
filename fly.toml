@@ -10,6 +10,8 @@ primary_region = 'ams'
 [env]
   APP_TZ = 'Asia/Jerusalem'
   DATA_DIR = '/data'
+  # Должен совпадать с internal_port ниже — на этом порту слушает server.js
+  PORT = '8080'
 
 [[mounts]]
   source = 'nash_dom_data'
