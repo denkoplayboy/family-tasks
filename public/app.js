@@ -83,6 +83,11 @@ const daysWord = (n) => `${n} ${plural(n, 'день', 'дня', 'дней')}`;
 const member = (id) => S.members.find((m) => m.id === id) || { id, name: '?', role: 'child' };
 const kids = () => S.members.filter((m) => m.role === 'child');
 const isParent = () => S.me && S.me.role === 'parent';
+const isViewer = () => S.me && S.me.role === 'viewer';
+const isChild = () => S.me && S.me.role === 'child';
+const REACTIONS = ['👏', '❤️', '🔥', '😂'];
+const promoOn = (t) => !!(t.promo && (!t.promo.until || S.today <= t.promo.until));
+const priceOf = (t) => (promoOn(t) ? t.promo.price : t.price);
 const colorVar = (id) => `var(--m-${id})`;
 const avatar = (m, cls = '') => `<span class="avatar ${cls} c-${h(m.id)}">${h((m.name || '?')[0].toUpperCase())}</span>`;
 const sum = (list) => list.reduce((s, e) => s + e.amountAg, 0);
@@ -97,16 +102,24 @@ function entryDetail(e) {
   return parts.join(' · ');
 }
 
-function unitLabel(t) {
-  if (t.type === 'hourly') return `${nf.format(t.price)} ₪/час`;
-  if (t.type === 'percent') return `${nf.format(t.price)}% от чека`;
+function unitLabel(t, price = t.price) {
+  if (t.type === 'hourly') return `${nf.format(price)} ₪/час`;
+  if (t.type === 'percent') return `${nf.format(price)}% от чека`;
   if (t.type === 'custom') return 'любая сумма';
-  return `${nf.format(t.price)} ₪`;
+  return `${nf.format(price)} ₪`;
+}
+
+function promoUntil(t) {
+  if (!t.promo || !t.promo.until) return 'пока кто-то не возьмёт';
+  const d = dn(t.promo.until) - dn(S.today);
+  if (d === 0) return 'только сегодня';
+  if (d === 1) return 'до завтра включительно';
+  return `до ${fmtDate(t.promo.until, { rel: false })} · ещё ${daysWord(d + 1)}`;
 }
 
 // Блокировка «не чаще раза в неделю» — общая на всю семью
 function weeklyLock(task, date = S.today) {
-  if (!task.weekly) return null;
+  if (!task.weekly || promoOn(task)) return null;
   const d = dn(date);
   const hit = S.entries.find((e) => e.taskId === task.id && Math.abs(dn(e.date) - d) < 7);
   if (!hit) return null;
@@ -193,7 +206,7 @@ const I = {
 
 // ================= Экран настройки =================
 function renderSetup() {
-  const roles = { dad: 'Папа', daughter: 'Ника', son: 'Денис' };
+  const roles = { dad: 'Папа', mom: 'Мама', daughter: 'Ника', son: 'Денис' };
   root.innerHTML = `
   <div class="center-screen"><div class="login">
     <div class="brand">${I.house}</div>
@@ -230,7 +243,7 @@ function renderSetup() {
 
 // ================= Вход =================
 function renderLogin() {
-  const desc = { parent: 'Панель выплат', child: 'Отмечать дела' };
+  const desc = { parent: 'Панель выплат', child: 'Отмечать дела', viewer: 'Смотреть и болеть 👏' };
   root.innerHTML = `
   <div class="center-screen"><div class="login">
     <div class="brand">${I.house}</div>
@@ -238,7 +251,12 @@ function renderLogin() {
     <p class="lead">Кто заходит?</p>
     <div class="who">
       ${S.pub.members
-        .map((m) => `<button data-id="${h(m.id)}">${avatar(m, 'lg')}<div><b>${h(m.name)}</b><span>${desc[m.role]}</span></div></button>`)
+        .map(
+          (m) =>
+            `<button data-id="${h(m.id)}" ${m.hasPin ? '' : 'disabled'}>${avatar(m, 'lg')}<div><b>${h(m.name)}</b><span>${
+              m.hasPin ? desc[m.role] : 'PIN ещё не задан — попросите главу семьи'
+            }</span></div></button>`
+        )
         .join('')}
     </div>
   </div></div>`;
@@ -293,6 +311,13 @@ function renderPin(id) {
 
 // ================= Каркас приложения =================
 function tabsFor() {
+  if (isViewer())
+    return [
+      ['home', 'Главная', I.home],
+      ['pay', 'Выплаты', I.wallet],
+      ['stats', 'Рейтинг', I.chart],
+      ['tasks', 'Дела', I.list],
+    ];
   return isParent()
     ? [
         ['home', 'Главная', I.home],
@@ -320,7 +345,8 @@ function renderApp() {
   const tabs = tabsFor();
   if (!tabs.find((t) => t[0] === S.tab)) S.tab = 'home';
   const scroll = window.scrollY;
-  const titles = { home: `${greeting()}, ${S.me.name}`, add: 'Что сделано?', stats: 'Рейтинг', history: 'Моя история', pay: 'Выплаты', settings: 'Настройки' };
+  const titles = { home: `${greeting()}, ${S.me.name}`, add: 'Что сделано?', stats: 'Рейтинг', history: 'Моя история', pay: 'Выплаты', settings: 'Настройки', tasks: 'Дела и цены' };
+  document.body.dataset.daypart = daypart();
   root.innerHTML = `
   <div class="app">
     <header class="topbar">
@@ -342,7 +368,8 @@ function renderApp() {
   );
   $('#profile').onclick = openProfile;
   const view = $('#view');
-  ({ home: viewHome, add: viewAdd, stats: viewStats, history: viewHistory, pay: viewPay, settings: viewSettings })[S.tab](view);
+  ({ home: viewHome, add: viewAdd, stats: viewStats, history: viewHistory, pay: viewPay, settings: viewSettings, tasks: viewTasks })[S.tab](view);
+  bindReactions(view);
   window.scrollTo(0, scroll);
 }
 
@@ -357,7 +384,7 @@ function viewHome(v) {
   const n = dn(S.today);
   const ws = weekStart(n);
   let hero;
-  if (isParent()) {
+  if (!isChild()) {
     const total = kids().reduce((s, k) => s + sum(unpaidOf(k.id)), 0);
     hero = `<section class="card hero">
       <div class="eyebrow">К выплате всего</div>
@@ -368,7 +395,9 @@ function viewHome(v) {
           return `<div class="split-item">${avatar(k, 'sm')}<div><b class="num">${money(sum(u))}</b><span>${h(k.name)} · ${tasksWord(u.length)}</span></div></div>`;
         })
         .join('')}</div>
-      <div class="chips"><button class="btn primary" data-go="pay">Открыть выплаты</button></div>
+      <div class="chips"><button class="btn primary" data-go="pay">${isParent() ? 'Открыть выплаты' : 'Посмотреть детали'}</button>${
+        isViewer() ? '<span class="chip">👀 Режим наблюдателя</span>' : ''
+      }</div>
     </section>`;
   } else {
     const u = unpaidOf(S.me.id);
@@ -388,14 +417,37 @@ function viewHome(v) {
 
   v.innerHTML =
     hero +
+    promoCard() +
     battleCard(ws) +
-    (isParent() ? '' : quickAdd()) +
+    (isChild() ? quickAdd() : '') +
     `<section class="card"><div class="card-head"><h2 class="card-title">Лента</h2><span class="card-note">последние дела</span></div>${feed(
       [...S.entries].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 12)
     )}</section>`;
 
   $$('[data-go]', v).forEach((b) => (b.onclick = () => ((S.tab = b.dataset.go), renderApp())));
   bindTaskTiles(v);
+}
+
+function promoCard() {
+  const hot = S.tasks.filter((t) => t.active && promoOn(t));
+  if (!hot.length) return '';
+  return `<section class="card hot-card">
+    <div class="card-head"><h2 class="card-title">🔥 Горящее предложение</h2><span class="card-note">${
+      isChild() ? 'успей первым' : 'для детей'
+    }</span></div>
+    ${hot
+      .map(
+        (t) => `<div class="hot-row">
+        <div class="feed-icon">${h(t.icon)}</div>
+        <div class="grow"><div class="feed-title">${h(t.name)}</div>
+          <div class="feed-meta"><s>${unitLabel(t)}</s> → <b class="hot-price">${unitLabel(t, t.promo.price)}</b> · ${promoUntil(t)}</div>
+          ${t.promo.note ? `<div class="feed-meta">«${h(t.promo.note)}»</div>` : ''}</div>
+        ${isChild() ? `<button class="btn primary" data-task="${h(t.id)}">Беру!</button>` : ''}
+        ${isParent() ? `<button class="btn ghost" data-go="settings">Изменить</button>` : ''}
+      </div>`
+      )
+      .join('')}
+  </section>`;
 }
 
 function battleCard(ws) {
@@ -442,14 +494,60 @@ function feed(list, { showWho = true, deletable = false } = {}) {
       return `<li>
         <div class="feed-icon">${h(e.icon)}</div>
         <div class="feed-main">
-          <div class="feed-title">${h(e.taskName)}</div>
+          <div class="feed-title">${h(e.taskName)}${e.promo ? ' <span class="hot-tag">🔥 акция</span>' : ''}</div>
           <div class="feed-meta">${showWho ? `<span class="dot c-${h(m.id)}" style="width:8px;height:8px"></span> ${h(m.name)} · ` : ''}${fmtDate(e.date)}${det ? ' · ' + h(det) : ''}</div>
+          ${reactionsRow(e)}
         </div>
         <div class="feed-amt num ${e.payoutId ? 'paid' : ''}">+${money(e.amountAg)}</div>
         ${canDel ? `<button class="icon-btn" data-del="${h(e.id)}" aria-label="Удалить">${I.x}</button>` : ''}
       </li>`;
     })
     .join('')}</ul>`;
+}
+
+function reactionsRow(e) {
+  const r = e.reactions || {};
+  const mine = e.memberId === S.me.id;
+  const chips = REACTIONS.filter((x) => r[x] && r[x].length)
+    .map((x) => {
+      const who = r[x].map((id) => member(id).name).join(', ');
+      const on = r[x].includes(S.me.id);
+      return `<button class="react ${on ? 'on' : ''}" ${mine ? 'disabled' : `data-react="${h(e.id)}" data-emoji="${x}"`} title="${h(who)}">${x}<span>${
+        r[x].length > 1 ? r[x].length : h(member(r[x][0]).name)
+      }</span></button>`;
+    })
+    .join('');
+  const add = mine
+    ? ''
+    : `<span class="react-pick">${REACTIONS.filter((x) => !(r[x] || []).includes(S.me.id))
+        .map((x) => `<button class="react ghost" data-react="${h(e.id)}" data-emoji="${x}" aria-label="Реакция ${x}">${x}</button>`)
+        .join('')}</span>`;
+  if (!chips && mine) return '';
+  return `<div class="reacts">${chips}${add ? `<button class="react add" data-react-open aria-label="Поставить реакцию">☺︎+</button>${add}` : ''}</div>`;
+}
+
+function bindReactions(v) {
+  $$('[data-react-open]', v).forEach(
+    (b) =>
+      (b.onclick = () => {
+        const row = b.closest('.reacts');
+        const was = row.classList.contains('open');
+        $$('.reacts.open', v).forEach((x) => x.classList.remove('open'));
+        row.classList.toggle('open', !was);
+      })
+  );
+  $$('[data-react]', v).forEach(
+    (b) =>
+      (b.onclick = async () => {
+        b.disabled = true;
+        try {
+          await api('POST', `/api/entries/${b.dataset.react}/react`, { emoji: b.dataset.emoji });
+          await refresh();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      })
+  );
 }
 
 function bindDeletes(v) {
@@ -481,17 +579,24 @@ function taskTiles(list) {
   return `<div class="tasks">${list
     .map((t) => {
       const lock = weeklyLock(t);
-      return `<button class="task ${lock ? 'locked' : ''}" data-task="${h(t.id)}">
+      const hot = promoOn(t);
+      return `<button class="task ${lock ? 'locked' : ''} ${hot ? 'hot' : ''}" data-task="${h(t.id)}">
         <span class="task-icon">${h(t.icon)}</span>
         <span class="task-name">${h(t.name)}</span>
-        <span class="task-price">${lock ? `🔒 через ${daysWord(lock.days)}` : unitLabel(t) + (t.weekly ? ' · раз в неделю' : '')}</span>
+        <span class="task-price">${
+          lock
+            ? `🔒 через ${daysWord(lock.days)}`
+            : hot
+            ? `🔥 <s>${unitLabel(t)}</s> ${unitLabel(t, t.promo.price)}`
+            : unitLabel(t) + (t.weekly ? ' · раз в неделю' : '')
+        }</span>
       </button>`;
     })
     .join('')}</div>`;
 }
 
 function availableTasks() {
-  return S.tasks.filter((t) => t.active && (!t.parentOnly || isParent()));
+  return S.tasks.filter((t) => t.active && (!t.parentOnly || isParent())).sort((a, b) => promoOn(b) - promoOn(a));
 }
 
 function quickAdd() {
@@ -536,10 +641,11 @@ function openAddSheet(task, forMember) {
     [nd(n - 2), 'Позавчера'],
   ];
 
+  const price = priceOf(task);
   const calc = () => {
-    if (task.type === 'fixed') return task.price * st.qty;
-    if (task.type === 'hourly') return task.price * st.hours;
-    if (task.type === 'percent') return ((Number(st.receipt) || 0) * task.price) / 100;
+    if (task.type === 'fixed') return price * st.qty;
+    if (task.type === 'hourly') return price * st.hours;
+    if (task.type === 'percent') return ((Number(st.receipt) || 0) * price) / 100;
     return Number(st.amount) || 0;
   };
 
@@ -553,7 +659,7 @@ function openAddSheet(task, forMember) {
     f += `<div class="field"><span>Когда</span><div class="pills">${dateOpts
       .map(([d, l]) => `<button type="button" class="pill ${st.date === d ? 'on' : ''}" data-date="${d}">${l}</button>`)
       .join('')}<input type="date" class="input" style="width:auto;padding:6px 10px" value="${st.date}" max="${S.today}" min="${nd(n - 30)}" data-datepick></div></div>`;
-    if (task.type === 'fixed' && !task.weekly)
+    if (task.type === 'fixed' && (!task.weekly || promoOn(task)))
       f += `<div class="field"><span>Сколько раз</span><div class="stepper"><button type="button" data-q="-1">−</button><b class="num">${st.qty}</b><button type="button" data-q="1">+</button></div></div>`;
     if (task.type === 'hourly')
       f += `<div class="field"><span>Сколько времени</span><div class="stepper"><button type="button" data-hr="-0.5">−</button><b class="num">${nf.format(st.hours)} ч</b><button type="button" data-hr="0.5">+</button></div>
@@ -573,8 +679,8 @@ function openAddSheet(task, forMember) {
   };
 
   openSheet(
-    `<div class="row" style="margin-bottom:6px"><span style="font-size:34px">${h(task.icon)}</span><div><h2>${h(task.name)}</h2><div class="hint">${unitLabel(task)}${
-      task.weekly ? ' · не чаще раза в неделю' : ''
+    `<div class="row" style="margin-bottom:6px"><span style="font-size:34px">${h(task.icon)}</span><div><h2>${h(task.name)}</h2><div class="hint">${
+      promoOn(task) ? `🔥 <s>${unitLabel(task)}</s> <b class="hot-price">${unitLabel(task, price)}</b> · разовая акция` : unitLabel(task) + (task.weekly ? ' · не чаще раза в неделю' : '')
     }</div></div></div><div class="stack" style="margin-top:14px" data-body></div>`,
     (sh) => {
       const box = $('[data-body]', sh);
@@ -616,6 +722,7 @@ function openAddSheet(task, forMember) {
             });
             closeSheet();
             toast(`${task.icon} Отмечено: +${money(Math.round(calc() * 100))}`);
+            confetti(promoOn(task) ? 70 : 36);
             await refresh();
           } catch (err) {
             toast(err.message, true);
@@ -804,11 +911,11 @@ function viewPay(v) {
           <div class="pay-sum num">${money(total)}</div>
           <div class="hint">${u.length ? `${tasksWord(u.length)} · с ${fmtDate(since)}` : 'Всё выплачено'}</div></div></div>
         <div class="pay-actions">
-          <button class="btn primary" data-payout="${h(k.id)}" ${u.length ? '' : 'disabled'}>Выплачено — обнулить</button>
+          ${isParent() ? `<button class="btn primary" data-payout="${h(k.id)}" ${u.length ? '' : 'disabled'}>Выплачено — обнулить</button>` : ''}
           <button class="btn" data-toggle="${h(k.id)}" ${u.length ? '' : 'disabled'}>${open ? 'Скрыть детали' : 'Детали'}</button>
-          <button class="btn ghost" data-addfor="${h(k.id)}">+ Дело или бонус</button>
+          ${isParent() ? `<button class="btn ghost" data-addfor="${h(k.id)}">+ Дело или бонус</button>` : ''}
         </div>
-        ${open && u.length ? `<div class="details">${feed(u, { showWho: false, deletable: true })}</div>` : ''}
+        ${open && u.length ? `<div class="details">${feed(u, { showWho: false, deletable: isParent() })}</div>` : ''}
       </section>`;
     })
     .join('');
@@ -825,7 +932,7 @@ function viewPay(v) {
               return `<li>${avatar(m, 'sm')}<div class="feed-main"><div class="feed-title num">${money(p.amountAg)}</div>
             <div class="feed-meta">${h(m.name)} · ${fmtDate(p.createdAt.slice(0, 10))} · ${tasksWord(p.count)}</div></div>
             <button class="btn ghost" data-payview="${h(p.id)}">Детали</button>
-            <button class="icon-btn" data-undo="${h(p.id)}" title="Отменить выплату" aria-label="Отменить выплату">↺</button></li>`;
+            ${isParent() ? `<button class="icon-btn" data-undo="${h(p.id)}" title="Отменить выплату" aria-label="Отменить выплату">↺</button>` : ''}</li>`;
             })
             .join('')}</ul>`
         : `<div class="empty">Выплат ещё не было</div>`
@@ -849,6 +956,7 @@ function viewPay(v) {
           S.openDetails[k.id] = false;
           await refresh();
           toast(`💸 ${k.name}: выплачено ${money(sum(u))}`);
+          confetti(50);
         } catch (err) {
           toast(err.message, true);
         }
@@ -901,18 +1009,25 @@ function viewSettings(v) {
       <button class="btn primary" type="submit">Сохранить</button>
     </form>
   </section>
-  <section class="card"><div class="card-head"><h2 class="card-title">Цены</h2><span class="card-note">изменения не влияют на уже отмеченные дела</span></div>
+  <section class="card"><div class="card-head"><h2 class="card-title">Дела и цены</h2><button class="btn primary" type="button" id="newtask">+ Новое дело</button></div>
+    <p class="hint" style="margin:-4px 0 6px">🔥 — сделать дело горящим предложением: оно появится у детей на главной, а после первого выполнения цена вернётся к обычной. Изменения цен не влияют на уже отмеченные дела.</p>
     <form id="prices">
       ${tasks
         .map(
-          (t) => `<div class="price-row"><div style="font-size:20px">${h(t.icon)}</div>
-          <div><div style="font-weight:600">${h(t.name)}</div><div class="opts">
+          (t) => `<div class="price-row"><div class="pr-icon">${h(t.icon)}</div>
+          <div class="pr-name"><div style="font-weight:600">${h(t.name)}</div>${
+            promoOn(t) ? `<div class="hot-tag" style="margin-top:4px">🔥 ${unitLabel(t, t.promo.price)} · ${promoUntil(t)}</div>` : ''
+          }</div>
+          <div class="row" style="gap:6px;white-space:nowrap"><input class="input small num" name="price-${t.id}" value="${t.price}" inputmode="decimal"><span class="unit">${
+            t.type === 'hourly' ? '₪/ч' : t.type === 'percent' ? '%' : '₪'
+          }</span><button type="button" class="flame ${promoOn(t) ? 'on' : ''}" data-promo="${h(t.id)}" title="Горящее предложение" aria-label="Горящее предложение">🔥</button></div>
+          <div class="opts">
             <label><span class="switch"><input type="checkbox" name="weekly-${t.id}" ${t.weekly ? 'checked' : ''}><span></span></span>раз в неделю</label>
             <label><span class="switch"><input type="checkbox" name="active-${t.id}" ${t.active ? 'checked' : ''}><span></span></span>активно</label>
-          </div></div>
-          <div style="white-space:nowrap"><input class="input small num" name="price-${t.id}" value="${t.price}" inputmode="decimal"><span class="unit">${
-            t.type === 'hourly' ? '₪/ч' : t.type === 'percent' ? '%' : '₪'
-          }</span></div></div>`
+            <span class="right row" style="gap:4px">
+              ${t.custom ? `<button type="button" class="icon-btn" data-deltask="${h(t.id)}" title="Удалить дело" aria-label="Удалить дело">${I.x}</button>` : ''}
+            </span>
+          </div></div>`
         )
         .join('')}
       <button class="btn primary" type="submit" style="margin-top:14px">Сохранить цены</button>
@@ -926,6 +1041,28 @@ function viewSettings(v) {
     <p class="hint" style="margin:0">iPhone: Safari → «Поделиться» → «На экран Домой».<br>Android: Chrome → меню ⋮ → «Добавить на главный экран».</p>
   </section>`;
 
+  $('#newtask').onclick = openNewTask;
+  $$('[data-promo]', v).forEach((b) => (b.onclick = () => openPromo(S.tasks.find((t) => t.id === b.dataset.promo))));
+  $$('[data-deltask]', v).forEach(
+    (b) =>
+      (b.onclick = async () => {
+        const t = S.tasks.find((x) => x.id === b.dataset.deltask);
+        const ok = await confirmSheet({
+          title: `Удалить «${t.name}»?`,
+          text: 'Уже отмеченные дела и выплаты останутся в истории. Если дело может ещё пригодиться — лучше просто выключить его.',
+          ok: 'Удалить',
+          danger: true,
+        });
+        if (!ok) return;
+        try {
+          await api('DELETE', '/api/tasks/' + t.id);
+          await refresh();
+          toast('Дело удалено');
+        } catch (err) {
+          toast(err.message, true);
+        }
+      })
+  );
   $('#fam').onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -963,10 +1100,176 @@ function viewSettings(v) {
   };
 }
 
+// ================= Новое дело и акции =================
+const EMOJI = ['✨', '🧺', '🧽', '🧼', '🪟', '🛏️', '🚿', '🛁', '🗑️', '♻️', '🪴', '🌿', '🐕', '🐈', '🚗', '🔧', '🪛', '💡', '📚', '🎒', '🧸', '🪑', '☕', '🥗', '🧁', '🍰', '🧊', '🧴', '🌸', '🎁', '📬', '🧹'];
+
+function openNewTask() {
+  const st = { icon: '✨', type: 'fixed', name: '', price: '', weekly: false };
+  const types = [
+    ['fixed', 'За раз'],
+    ['hourly', 'За час'],
+    ['percent', '% от суммы'],
+  ];
+  const paint = (sh) => {
+    $('[data-body]', sh).innerHTML = `
+      <div class="newtask-preview"><span>${h(st.icon)}</span><div><b>${h(st.name || 'Новое дело')}</b><div class="hint">${
+        st.price ? unitLabel({ type: st.type }, Number(String(st.price).replace(',', '.')) || 0) : 'цена'
+      }${st.weekly ? ' · раз в неделю' : ''}</div></div></div>
+      <label class="field"><span>Название</span><input class="input" data-name maxlength="40" placeholder="Например: выгулять собаку" value="${h(st.name)}"></label>
+      <div class="field"><span>Значок</span><div class="emoji-grid">${EMOJI.map(
+        (e) => `<button type="button" class="${st.icon === e ? 'on' : ''}" data-emo="${e}">${e}</button>`
+      ).join('')}</div></div>
+      <div class="field"><span>Как оплачивается</span><div class="pills">${types
+        .map(([k, l]) => `<button type="button" class="pill ${st.type === k ? 'on' : ''}" data-type="${k}">${l}</button>`)
+        .join('')}</div></div>
+      <label class="field"><span>${st.type === 'percent' ? 'Процент' : st.type === 'hourly' ? 'Цена за час, ₪' : 'Цена, ₪'}</span><input class="input" data-price inputmode="decimal" placeholder="${
+        st.type === 'percent' ? '10' : '20'
+      }" value="${h(st.price)}"></label>
+      <label class="row" style="justify-content:space-between"><span style="font-weight:600;font-size:14px">Не чаще раза в неделю</span><span class="switch"><input type="checkbox" data-weekly ${
+        st.weekly ? 'checked' : ''
+      }><span></span></span></label>
+      <button class="btn primary block" data-save>Добавить дело</button>`;
+    $$('[data-emo]', sh).forEach((b) => (b.onclick = () => ((st.icon = b.dataset.emo), paint(sh))));
+    $$('[data-type]', sh).forEach((b) => (b.onclick = () => ((st.type = b.dataset.type), paint(sh))));
+    $('[data-weekly]', sh).onchange = (e) => ((st.weekly = e.target.checked), paint(sh));
+    const name = $('[data-name]', sh);
+    name.oninput = () => {
+      st.name = name.value;
+      $('.newtask-preview b', sh).textContent = st.name || 'Новое дело';
+    };
+    const price = $('[data-price]', sh);
+    price.oninput = () => {
+      st.price = price.value;
+      $('.newtask-preview .hint', sh).textContent =
+        unitLabel({ type: st.type }, Number(String(st.price).replace(',', '.')) || 0) + (st.weekly ? ' · раз в неделю' : '');
+    };
+    $('[data-save]', sh).onclick = async (e) => {
+      e.target.disabled = true;
+      try {
+        await api('POST', '/api/tasks', st);
+        closeSheet();
+        toast(`${st.icon} Дело «${st.name.trim()}» добавлено`);
+        await refresh();
+      } catch (err) {
+        toast(err.message, true);
+        e.target.disabled = false;
+      }
+    };
+  };
+  openSheet(`<h2>Новое дело</h2><p class="lead">Появится у всех сразу после сохранения.</p><div class="stack" data-body></div>`, paint);
+}
+
+function openPromo(task) {
+  const n = dn(S.today);
+  const sat = weekStart(n) + 6;
+  const on = promoOn(task);
+  const st = {
+    price: on ? task.promo.price : task.type === 'percent' ? task.price * 2 : Math.ceil((task.price * 1.5) / 5) * 5,
+    until: on ? task.promo.until || '' : '',
+    note: on ? task.promo.note || '' : '',
+  };
+  const untilOpts = [
+    ['', 'Без срока'],
+    [S.today, 'Только сегодня'],
+    [nd(Math.max(n, sat)), 'До конца недели'],
+  ];
+  const paint = (sh) => {
+    $('[data-body]', sh).innerHTML = `
+      <div class="field"><span>Акционная цена (обычная — ${unitLabel(task)})</span>
+        <input class="input" data-price inputmode="decimal" value="${h(st.price)}"></div>
+      <div class="field"><span>Срок</span><div class="pills">${untilOpts
+        .map(([d, l]) => `<button type="button" class="pill ${st.until === d ? 'on' : ''}" data-until="${d}">${l}</button>`)
+        .join('')}<input type="date" class="input" style="width:auto;padding:6px 10px" min="${S.today}" value="${st.until}" data-untilpick></div></div>
+      <label class="field"><span>Сообщение (необязательно)</span><input class="input" data-note maxlength="120" placeholder="Например: к приходу гостей в пятницу" value="${h(st.note)}"></label>
+      <p class="hint" style="margin:0">Акция разовая: первый, кто выполнит дело, получит акционную цену, после этого цена вернётся к ${unitLabel(task)}.${
+        task.weekly ? ' Ограничение «раз в неделю» на акцию не действует.' : ''
+      }</p>
+      <button class="btn primary block" data-save>${on ? 'Сохранить' : 'Зажечь 🔥'}</button>
+      ${on ? '<button class="btn danger block" data-off>Погасить акцию</button>' : ''}`;
+    $$('[data-until]', sh).forEach((b) => (b.onclick = () => ((st.until = b.dataset.until), paint(sh))));
+    $('[data-untilpick]', sh).onchange = (e) => ((st.until = e.target.value), paint(sh));
+    $('[data-price]', sh).oninput = (e) => (st.price = e.target.value);
+    $('[data-note]', sh).oninput = (e) => (st.note = e.target.value);
+    $('[data-save]', sh).onclick = async (e) => {
+      e.target.disabled = true;
+      try {
+        await api('PUT', `/api/tasks/${task.id}/promo`, st);
+        closeSheet();
+        toast(`🔥 «${task.name}» — горящее предложение`);
+        await refresh();
+      } catch (err) {
+        toast(err.message, true);
+        e.target.disabled = false;
+      }
+    };
+    const off = $('[data-off]', sh);
+    if (off)
+      off.onclick = async () => {
+        try {
+          await api('DELETE', `/api/tasks/${task.id}/promo`);
+          closeSheet();
+          toast('Акция снята');
+          await refresh();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+  };
+  openSheet(
+    `<div class="row" style="margin-bottom:6px"><span style="font-size:34px">${h(task.icon)}</span><div><h2>Горящее предложение</h2><div class="hint">${h(task.name)}</div></div></div><div class="stack" style="margin-top:14px" data-body></div>`,
+    paint
+  );
+}
+
+// ================= Дела (наблюдатель) =================
+function viewTasks(v) {
+  const list = S.tasks.filter((t) => t.active);
+  v.innerHTML = `<section class="card"><div class="card-head"><h2 class="card-title">Что можно сделать</h2><span class="card-note">${tasksWord(list.length)}</span></div>
+    <ul class="feed">${list
+      .map((t) => {
+        const lock = weeklyLock(t);
+        return `<li><div class="feed-icon">${h(t.icon)}</div><div class="feed-main"><div class="feed-title">${h(t.name)}</div>
+        <div class="feed-meta">${
+          promoOn(t)
+            ? `🔥 <s>${unitLabel(t)}</s> <b class="hot-price">${unitLabel(t, t.promo.price)}</b> · ${promoUntil(t)}`
+            : unitLabel(t) + (t.weekly ? ' · раз в неделю' : '')
+        }${lock ? ` · 🔒 сделал(а) ${h(lock.who)}, ${fmtDate(lock.entry.date)}` : ''}</div></div></li>`;
+      })
+      .join('')}</ul></section>`;
+}
+
+// ================= Мелкие радости =================
+function daypart() {
+  const hr = new Date().getHours();
+  if (hr >= 5 && hr < 11) return 'morning';
+  if (hr >= 11 && hr < 17) return 'day';
+  if (hr >= 17 && hr < 22) return 'evening';
+  return 'night';
+}
+
+function confetti(n = 40) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const colors = ['var(--m-daughter)', 'var(--m-son)', 'var(--accent)', 'var(--gold)', 'var(--m-mom)'];
+  const box = document.createElement('div');
+  box.className = 'confetti';
+  for (let i = 0; i < n; i++) {
+    const p = document.createElement('i');
+    const size = 5 + Math.random() * 6;
+    p.style.cssText = `left:${50 + (Math.random() - 0.5) * 30}%;width:${size}px;height:${size * (Math.random() < 0.5 ? 1 : 1.8)}px;background:${
+      colors[i % colors.length]
+    };border-radius:${Math.random() < 0.5 ? '50%' : '3px'};--x:${(Math.random() - 0.5) * 520}px;--y:${-(240 + Math.random() * 320)}px;--r:${
+      (Math.random() - 0.5) * 900
+    }deg;animation-delay:${Math.random() * 120}ms;animation-duration:${1300 + Math.random() * 700}ms`;
+    box.appendChild(p);
+  }
+  document.body.appendChild(box);
+  setTimeout(() => box.remove(), 2400);
+}
+
 // ================= Профиль =================
 function openProfile() {
   openSheet(
-    `<div class="row">${avatar(S.me, 'lg')}<div><h2>${h(S.me.name)}</h2><div class="hint">${isParent() ? 'Глава семьи' : 'Участник'}</div></div></div>
+    `<div class="row">${avatar(S.me, 'lg')}<div><h2>${h(S.me.name)}</h2><div class="hint">${isParent() ? 'Глава семьи' : isViewer() ? 'Наблюдатель — смотрит и болеет' : 'Участник'}</div></div></div>
     <form class="stack" style="margin-top:18px" id="pinform">
       <div class="section-label" style="margin:0">Сменить PIN</div>
       ${isParent() ? '' : `<input class="input" name="old" inputmode="numeric" maxlength="4" placeholder="Текущий PIN" autocomplete="off">`}
@@ -1007,8 +1310,13 @@ function startEvents() {
     await refresh();
     if (data.by === S.me.id) return;
     const who = member(data.by).name;
-    if (data.kind === 'entry') toast(`${who === member(data.memberId).name ? who : `${who} → ${member(data.memberId).name}`}: ${data.text} +${money(data.amountAg)}`);
-    if (data.kind === 'payout' && data.memberId === S.me.id) toast(`💸 Выплата: ${money(data.amountAg)}!`);
+    if (data.kind === 'entry') toast((data.promo ? '🔥 ' : '') + `${who === member(data.memberId).name ? who : `${who} → ${member(data.memberId).name}`}: ${data.text} +${money(data.amountAg)}`);
+    if (data.kind === 'payout' && data.memberId === S.me.id) {
+      toast(`💸 Выплата: ${money(data.amountAg)}!`);
+      confetti(60);
+    }
+    if (data.kind === 'promo') toast(`🔥 Горящее предложение: ${data.text} — ${unitLabel({ type: data.type }, data.price)}`);
+    if (data.kind === 'react' && data.on && data.memberId === S.me.id) toast(`${who}: ${data.emoji} за «${data.text}»`);
   });
   es.onerror = () => {
     // браузер переподключится сам; если сессия закончилась — вернёмся на вход

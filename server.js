@@ -38,8 +38,11 @@ const DEFAULT_TASKS = [
   { id: 'bonus', name: 'Бонус от родителя', icon: '🎁', type: 'custom', price: 0, parentOnly: true, noteRequired: true },
 ];
 
+const REACTIONS = ['👏', '❤️', '🔥', '😂'];
+
 const DEFAULT_MEMBERS = [
   { id: 'dad', name: 'Папа', role: 'parent' },
+  { id: 'mom', name: 'Мама', role: 'viewer' },
   { id: 'daughter', name: 'Дочь', role: 'child' },
   { id: 'son', name: 'Сын', role: 'child' },
 ];
@@ -70,16 +73,59 @@ function loadDb() {
       }
     }
     db.sessions ||= {};
+    // Миграция: добавляем новых участников (например, маму) на свои места
+    DEFAULT_MEMBERS.forEach((m, i) => {
+      if (!db.members.find((x) => x.id === m.id)) db.members.splice(i, 0, { ...m });
+    });
+    saveDb();
   } else {
     db = freshDb();
     saveDb();
   }
 }
 
+let dbMtime = 0;
 function saveDb() {
   const tmp = DB_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db, null, 1));
   fs.renameSync(tmp, DB_FILE);
+  dbMtime = fs.statSync(DB_FILE).mtimeMs;
+}
+
+// Если файл изменили снаружи (например, командой --reset-pin), перечитываем его
+function syncDb() {
+  try {
+    const m = fs.statSync(DB_FILE).mtimeMs;
+    if (m !== dbMtime) {
+      db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      db.sessions ||= {};
+      dbMtime = m;
+    }
+  } catch (e) {
+    console.error('syncDb failed', e);
+  }
+}
+
+// Горящее предложение активно, пока его никто не выполнил и не истёк срок
+function promoActive(task, date = todayStr()) {
+  return !!(task.promo && (!task.promo.until || date <= task.promo.until));
+}
+
+function cleanupPromos() {
+  let changed = false;
+  const today = todayStr();
+  for (const t of db.tasks) {
+    if (t.promo && t.promo.until && t.promo.until < today) {
+      delete t.promo;
+      changed = true;
+    }
+  }
+  if (changed) saveDb();
+}
+
+function parsePrice(v) {
+  const p = Math.round(Number(String(v).replace(',', '.')) * 100) / 100;
+  return p >= 0 && p <= 10000 ? p : null;
 }
 
 // Ежедневная резервная копия (хранятся последние 14)
@@ -126,7 +172,7 @@ function numToDate(n) {
 const isDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
 
 function publicMember(m) {
-  return { id: m.id, name: m.name, role: m.role };
+  return { id: m.id, name: m.name, role: m.role, hasPin: !!m.pin };
 }
 
 function validPin(pin) {
@@ -234,6 +280,7 @@ function loginFailed(key) {
 
 // ---------- API ----------
 function statePayload(me) {
+  cleanupPromos();
   return {
     me: publicMember(me),
     today: todayStr(),
@@ -342,6 +389,9 @@ async function api(req, res, url) {
 
     const note = String(b.note || '').trim().slice(0, 300);
     if (task.noteRequired && !note) return fail(res, 400, 'Добавьте короткое описание');
+    cleanupPromos();
+    const hot = promoActive(task);
+    const price = hot ? task.promo.price : task.price;
 
     const entry = {
       id: id(),
@@ -350,7 +400,7 @@ async function api(req, res, url) {
       taskName: task.name,
       icon: task.icon,
       type: task.type,
-      price: task.price,
+      price,
       date,
       note,
       createdAt: new Date().toISOString(),
@@ -364,32 +414,37 @@ async function api(req, res, url) {
       if (qty < 1 || qty > 10) return fail(res, 400, 'Количество от 1 до 10');
       if (task.weekly && qty !== 1) return fail(res, 400, 'Это дело можно отметить только один раз');
       entry.qty = qty;
-      amount = task.price * qty;
+      amount = price * qty;
     } else if (task.type === 'hourly') {
       const hours = Math.round(Number(b.hours) * 4) / 4;
       if (!(hours >= 0.25 && hours <= 12)) return fail(res, 400, 'Укажите время от 15 минут до 12 часов');
       entry.hours = hours;
-      amount = task.price * hours;
+      amount = price * hours;
     } else if (task.type === 'percent') {
       const receipt = Math.round(Number(b.receipt) * 100) / 100;
       if (!(receipt > 0 && receipt <= 10000)) return fail(res, 400, 'Укажите сумму чека');
       entry.receipt = receipt;
-      amount = (receipt * task.price) / 100;
+      amount = (receipt * price) / 100;
     } else if (task.type === 'custom') {
       const sum = Math.round(Number(b.amount) * 100) / 100;
       if (!(sum > 0 && sum <= 10000)) return fail(res, 400, 'Укажите сумму');
       amount = sum;
     } else return fail(res, 400, 'Неизвестный тип дела');
 
-    const conflict = weeklyConflict(task, date);
+    const conflict = hot ? null : weeklyConflict(task, date);
     if (conflict) {
       return fail(res, 409, `«${task.name}» уже отмечено (${conflict.who}, ${conflict.entry.date}). Не чаще раза в неделю — снова можно с ${conflict.nextDate}`);
     }
 
     entry.amountAg = Math.round(amount * 100);
+    if (hot) {
+      // Акция разовая: первое выполнение её забирает, цена возвращается к обычной
+      entry.promo = true;
+      delete task.promo;
+    }
     db.entries.push(entry);
     saveDb();
-    broadcast({ kind: 'entry', by: me.id, memberId, text: `${task.icon} ${task.name}`, amountAg: entry.amountAg });
+    broadcast({ kind: 'entry', by: me.id, memberId, text: `${task.icon} ${task.name}`, amountAg: entry.amountAg, promo: hot });
     return send(res, 200, { ok: true, entry });
   }
 
@@ -403,6 +458,78 @@ async function api(req, res, url) {
     db.entries.splice(idx, 1);
     saveDb();
     broadcast({ kind: 'entry-deleted', by: me.id, memberId: e.memberId });
+    return send(res, 200, { ok: true });
+  }
+
+  if (req.method === 'POST' && (m = url.pathname.match(/^\/api\/entries\/([a-f0-9]+)\/react$/))) {
+    const e = db.entries.find((x) => x.id === m[1]);
+    if (!e) return fail(res, 404, 'Запись не найдена');
+    if (e.memberId === me.id) return fail(res, 400, 'Себе реакции не ставят 🙂');
+    const b = await readBody(req);
+    if (!REACTIONS.includes(b.emoji)) return fail(res, 400, 'Неизвестная реакция');
+    e.reactions ||= {};
+    const list = (e.reactions[b.emoji] ||= []);
+    const i = list.indexOf(me.id);
+    if (i > -1) list.splice(i, 1);
+    else list.push(me.id);
+    if (!list.length) delete e.reactions[b.emoji];
+    saveDb();
+    broadcast({ kind: 'react', by: me.id, memberId: e.memberId, emoji: b.emoji, on: i < 0, text: e.taskName });
+    return send(res, 200, { ok: true });
+  }
+
+  if (route === 'POST /api/tasks') {
+    if (!isParent) return fail(res, 403, 'Только для родителя');
+    const b = await readBody(req);
+    const name = String(b.name || '').trim().slice(0, 40);
+    if (!name) return fail(res, 400, 'Как называется дело?');
+    if (db.tasks.find((t) => t.name.toLowerCase() === name.toLowerCase())) return fail(res, 409, 'Такое дело уже есть');
+    if (!['fixed', 'hourly', 'percent'].includes(b.type)) return fail(res, 400, 'Выберите тип оплаты');
+    const price = parsePrice(b.price);
+    if (price === null || price === 0) return fail(res, 400, 'Укажите цену');
+    const icon = String(b.icon || '✨').slice(0, 8);
+    const task = { id: 'c' + id(), name, icon, type: b.type, price, weekly: !!b.weekly, noteRequired: false, parentOnly: false, active: true, custom: true };
+    const bonusIdx = db.tasks.findIndex((t) => t.id === 'bonus');
+    db.tasks.splice(bonusIdx < 0 ? db.tasks.length : bonusIdx, 0, task);
+    saveDb();
+    broadcast({ kind: 'tasks', by: me.id });
+    return send(res, 200, { ok: true, task });
+  }
+
+  if (req.method === 'DELETE' && (m = url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)$/))) {
+    if (!isParent) return fail(res, 403, 'Только для родителя');
+    const idx = db.tasks.findIndex((t) => t.id === m[1]);
+    if (idx < 0) return fail(res, 404, 'Дело не найдено');
+    if (!db.tasks[idx].custom) return fail(res, 400, 'Стандартные дела можно только выключить');
+    db.tasks.splice(idx, 1); // записи хранят название и иконку, история не пострадает
+    saveDb();
+    broadcast({ kind: 'tasks', by: me.id });
+    return send(res, 200, { ok: true });
+  }
+
+  if ((m = url.pathname.match(/^\/api\/tasks\/([a-z0-9]+)\/promo$/))) {
+    if (!isParent) return fail(res, 403, 'Только для родителя');
+    const task = db.tasks.find((t) => t.id === m[1]);
+    if (!task || task.type === 'custom') return fail(res, 404, 'Дело не найдено');
+    if (req.method === 'DELETE') {
+      delete task.promo;
+      saveDb();
+      broadcast({ kind: 'tasks', by: me.id });
+      return send(res, 200, { ok: true });
+    }
+    if (req.method !== 'PUT') return fail(res, 405, 'method not allowed');
+    const b = await readBody(req);
+    const price = parsePrice(b.price);
+    if (price === null || price === 0) return fail(res, 400, 'Укажите акционную цену');
+    let until = null;
+    if (b.until) {
+      if (!isDate(b.until) || b.until < todayStr()) return fail(res, 400, 'Срок акции — сегодня или позже');
+      until = b.until;
+    }
+    task.promo = { price, until, note: String(b.note || '').trim().slice(0, 120), createdAt: new Date().toISOString() };
+    task.active = true;
+    saveDb();
+    broadcast({ kind: 'promo', by: me.id, text: `${task.icon} ${task.name}`, price, type: task.type });
     return send(res, 200, { ok: true });
   }
 
@@ -470,8 +597,8 @@ async function api(req, res, url) {
       const t = db.tasks.find((x) => x.id === upd.id);
       if (!t) continue;
       if (upd.price !== undefined && t.type !== 'custom') {
-        const p = Math.round(Number(upd.price) * 100) / 100;
-        if (!(p >= 0 && p <= 10000)) return fail(res, 400, `Неверная цена для «${t.name}»`);
+        const p = parsePrice(upd.price);
+        if (p === null) return fail(res, 400, `Неверная цена для «${t.name}»`);
         t.price = p;
       }
       if (upd.weekly !== undefined) t.weekly = !!upd.weekly;
@@ -537,7 +664,7 @@ function main() {
     const [mid, pin] = process.argv.slice(ri + 1);
     const member = db.members.find((x) => x.id === mid);
     if (!member || !validPin(pin)) {
-      console.error('Использование: node server.js --reset-pin <dad|daughter|son> <PIN из 4 цифр>');
+      console.error('Использование: node server.js --reset-pin <dad|mom|daughter|son> <PIN из 4 цифр>');
       process.exit(1);
     }
     member.pin = hashPin(pin);
@@ -552,7 +679,10 @@ function main() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
-      if (url.pathname.startsWith('/api/')) await api(req, res, url);
+      if (url.pathname.startsWith('/api/')) {
+        syncDb();
+        await api(req, res, url);
+      }
       else if (req.method === 'GET' || req.method === 'HEAD') serveStatic(req, res, url);
       else fail(res, 405, 'method not allowed');
     } catch (e) {
