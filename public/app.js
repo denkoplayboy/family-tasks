@@ -8,7 +8,9 @@ const S = {
   members: [],
   tasks: [],
   entries: [],
+  expenses: [],
   payouts: [],
+  expFilter: 'all',
   tab: 'home',
   period: '30',
   openDetails: {},
@@ -92,6 +94,41 @@ const colorVar = (id) => `var(--m-${id})`;
 const avatar = (m, cls = '') => `<span class="avatar ${cls} c-${h(m.id)}">${h((m.name || '?')[0].toUpperCase())}</span>`;
 const sum = (list) => list.reduce((s, e) => s + e.amountAg, 0);
 const unpaidOf = (id) => S.entries.filter((e) => e.memberId === id && !e.payoutId);
+
+// ---- Расходы и возмещения ----
+const EXP_CATS = [
+  { id: 'rent', name: 'Квартира', icon: '🏠' },
+  { id: 'electricity', name: 'Электричество', icon: '💡' },
+  { id: 'water', name: 'Вода и газ', icon: '💧' },
+  { id: 'internet', name: 'Связь и интернет', icon: '📶' },
+  { id: 'groceries', name: 'Продукты', icon: '🛒' },
+  { id: 'transport', name: 'Транспорт', icon: '🚌' },
+  { id: 'clothes', name: 'Одежда и обувь', icon: '👟' },
+  { id: 'health', name: 'Здоровье', icon: '💊' },
+  { id: 'study', name: 'Учёба', icon: '📚' },
+  { id: 'card', name: 'Карта / общие', icon: '💳' },
+  { id: 'fun', name: 'Досуг', icon: '🎟️' },
+  { id: 'other', name: 'Другое', icon: '📎' },
+];
+const expCat = (id) => EXP_CATS.find((c) => c.id === id) || EXP_CATS[EXP_CATS.length - 1];
+const refundsOf = (id) => S.expenses.filter((x) => x.memberId === id && x.status === 'approved' && !x.payoutId);
+const pendingExp = (id) => S.expenses.filter((x) => x.status === 'pending' && (!id || x.memberId === id));
+const sumApproved = (list) => list.reduce((s, x) => s + x.approvedAg, 0);
+const sumTotal = (list) => list.reduce((s, x) => s + x.totalAg, 0);
+function owedOf(id) {
+  const e = unpaidOf(id);
+  const r = refundsOf(id);
+  return { e, r, chores: sum(e), refund: sumApproved(r), total: sum(e) + sumApproved(r) };
+}
+const refundsWord = (n) => `${n} ${plural(n, 'возмещение', 'возмещения', 'возмещений')}`;
+const itemsWord = (n) => `${n} ${plural(n, 'позиция', 'позиции', 'позиций')}`;
+function owedLine(o) {
+  const parts = [];
+  if (o.e.length) parts.push(tasksWord(o.e.length));
+  if (o.r.length) parts.push(`🧾 ${money(o.refund)}`);
+  return parts.join(' + ') || 'всё выплачено';
+}
+const parentName = () => (S.members.find((m) => m.role === 'parent') || { name: 'папе' }).name;
 
 function entryDetail(e) {
   const parts = [];
@@ -200,6 +237,7 @@ const I = {
   list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
   wallet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12v4"/><path d="M4 7v11a2 2 0 0 0 2 2h14V9H6a2 2 0 0 1-2-2z"/><circle cx="16" cy="14.5" r="1.2" fill="currentColor"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  receipt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>',
   x: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   house: '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M7 21 24 7l17 14v18a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2z"/><path d="m17 28 5 5 9-10"/></svg>',
 };
@@ -315,6 +353,7 @@ function tabsFor() {
     return [
       ['home', 'Главная', I.home],
       ['pay', 'Выплаты', I.wallet],
+      ['expenses', 'Расходы', I.receipt],
       ['stats', 'Рейтинг', I.chart],
       ['tasks', 'Дела', I.list],
     ];
@@ -322,12 +361,14 @@ function tabsFor() {
     ? [
         ['home', 'Главная', I.home],
         ['pay', 'Выплаты', I.wallet],
+        ['expenses', 'Расходы', I.receipt],
         ['stats', 'Рейтинг', I.chart],
         ['settings', 'Настройки', I.gear],
       ]
     : [
         ['home', 'Главная', I.home],
         ['add', 'Отметить', I.plus],
+        ['expenses', 'Расходы', I.receipt],
         ['stats', 'Рейтинг', I.chart],
         ['history', 'История', I.list],
       ];
@@ -345,7 +386,7 @@ function renderApp() {
   const tabs = tabsFor();
   if (!tabs.find((t) => t[0] === S.tab)) S.tab = 'home';
   const scroll = window.scrollY;
-  const titles = { home: `${greeting()}, ${S.me.name}`, add: 'Что сделано?', stats: 'Рейтинг', history: 'Моя история', pay: 'Выплаты', settings: 'Настройки', tasks: 'Дела и цены' };
+  const titles = { home: `${greeting()}, ${S.me.name}`, add: 'Что сделано?', stats: 'Рейтинг', history: 'Моя история', pay: 'Выплаты', settings: 'Настройки', tasks: 'Дела и цены', expenses: 'Расходы' };
   document.body.dataset.daypart = daypart();
   root.innerHTML = `
   <div class="app">
@@ -356,7 +397,10 @@ function renderApp() {
     <main class="stack" id="view"></main>
   </div>
   <nav class="nav">${tabs
-    .map(([id, label, icon]) => `<button data-tab="${id}" class="${id === S.tab ? 'on' : ''} ${id === 'add' ? 'plus' : ''}">${icon}<span>${label}</span></button>`)
+    .map(([id, label, icon]) => {
+      const badge = id === 'expenses' && isParent() && pendingExp().length ? `<em class="badge">${pendingExp().length}</em>` : '';
+      return `<button data-tab="${id}" class="${id === S.tab ? 'on' : ''} ${id === 'add' ? 'plus' : ''}">${icon}${badge}<span>${label}</span></button>`;
+    })
     .join('')}</nav>`;
   $$('.nav button').forEach(
     (b) =>
@@ -368,7 +412,7 @@ function renderApp() {
   );
   $('#profile').onclick = openProfile;
   const view = $('#view');
-  ({ home: viewHome, add: viewAdd, stats: viewStats, history: viewHistory, pay: viewPay, settings: viewSettings, tasks: viewTasks })[S.tab](view);
+  ({ home: viewHome, add: viewAdd, stats: viewStats, history: viewHistory, pay: viewPay, settings: viewSettings, tasks: viewTasks, expenses: viewExpenses })[S.tab](view);
   bindReactions(view);
   window.scrollTo(0, scroll);
 }
@@ -385,30 +429,37 @@ function viewHome(v) {
   const ws = weekStart(n);
   let hero;
   if (!isChild()) {
-    const total = kids().reduce((s, k) => s + sum(unpaidOf(k.id)), 0);
+    const total = kids().reduce((s, k) => s + owedOf(k.id).total, 0);
+    const pend = pendingExp();
     hero = `<section class="card hero">
       <div class="eyebrow">К выплате всего</div>
       <div class="hero-num num">${money(total)}</div>
       <div class="split">${kids()
         .map((k) => {
-          const u = unpaidOf(k.id);
-          return `<div class="split-item">${avatar(k, 'sm')}<div><b class="num">${money(sum(u))}</b><span>${h(k.name)} · ${tasksWord(u.length)}</span></div></div>`;
+          const o = owedOf(k.id);
+          return `<div class="split-item">${avatar(k, 'sm')}<div><b class="num">${money(o.total)}</b><span>${h(k.name)} · ${owedLine(o)}</span></div></div>`;
         })
         .join('')}</div>
       <div class="chips"><button class="btn primary" data-go="pay">${isParent() ? 'Открыть выплаты' : 'Посмотреть детали'}</button>${
-        isViewer() ? '<span class="chip">👀 Режим наблюдателя</span>' : ''
-      }</div>
+        pend.length
+          ? `<button class="chip chip-btn" data-go="expenses">🧾 ${isParent() ? 'Ждут проверки' : 'На проверке'}: ${pend.length} · ${money(sumTotal(pend))}</button>`
+          : ''
+      }${isViewer() ? '<span class="chip">👀 Режим наблюдателя</span>' : ''}</div>
     </section>`;
   } else {
-    const u = unpaidOf(S.me.id);
+    const o = owedOf(S.me.id);
+    const pend = pendingExp(S.me.id);
     const wk = S.entries.filter((e) => e.memberId === S.me.id && dn(e.date) >= ws);
     const st = streak(S.me.id);
     const lastPay = S.payouts.filter((p) => p.memberId === S.me.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     hero = `<section class="card hero">
-      <div class="eyebrow">Заработано и ещё не выплачено</div>
-      <div class="hero-num num">${money(sum(u))}</div>
-      <div class="hero-sub">На этой неделе: <b class="num">${money(sum(wk))}</b> · ${tasksWord(wk.length)}</div>
+      <div class="eyebrow">К выплате</div>
+      <div class="hero-num num">${money(o.total)}</div>
+      <div class="hero-sub">${o.refund ? `За дела <b class="num">${money(o.chores)}</b> + возмещения <b class="num">${money(o.refund)}</b><br>` : ''}На этой неделе заработано: <b class="num">${money(
+        sum(wk)
+      )}</b> · ${tasksWord(wk.length)}</div>
       <div class="chips">
+        ${pend.length ? `<button class="chip chip-btn" data-go="expenses">🧾 На проверке: ${money(sumTotal(pend))}</button>` : ''}
         ${st ? `<span class="chip">🔥 Серия: ${daysWord(st)}</span>` : `<span class="chip">Отметь дело сегодня — начнётся серия 🔥</span>`}
         ${lastPay ? `<span class="chip">Последняя выплата: ${money(lastPay.amountAg)}, ${fmtDate(lastPay.createdAt.slice(0, 10))}</span>` : ''}
       </div>
@@ -633,7 +684,7 @@ function bindTaskTiles(v, forMember) {
 }
 
 function openAddSheet(task, forMember) {
-  const st = { date: S.today, qty: 1, hours: 1, receipt: '', amount: '', note: '', memberId: forMember || (isParent() ? kids()[0].id : S.me.id) };
+  const st = { date: S.today, qty: 1, hours: 1, receipt: '', amount: '', note: '', refund: false, memberId: forMember || (isParent() ? kids()[0].id : S.me.id) };
   const n = dn(S.today);
   const dateOpts = [
     [S.today, 'Сегодня'],
@@ -664,8 +715,13 @@ function openAddSheet(task, forMember) {
     if (task.type === 'hourly')
       f += `<div class="field"><span>Сколько времени</span><div class="stepper"><button type="button" data-hr="-0.5">−</button><b class="num">${nf.format(st.hours)} ч</b><button type="button" data-hr="0.5">+</button></div>
         <div class="pills">${[0.5, 1, 1.5, 2, 3].map((x) => `<button type="button" class="pill ${st.hours === x ? 'on' : ''}" data-hset="${x}">${nf.format(x)} ч</button>`).join('')}</div></div>`;
-    if (task.type === 'percent')
+    if (task.type === 'percent') {
       f += `<label class="field"><span>Сумма чека, ₪</span><input class="input" inputmode="decimal" data-receipt placeholder="например, 245" value="${h(st.receipt)}"></label>`;
+      if (isChild())
+        f += `<label class="row refund-toggle"><span class="grow"><b>Платил(а) своими деньгами</b><span class="hint">Сразу отправить ${h(
+          parentName()
+        )} запрос на возмещение чека</span></span><span class="switch"><input type="checkbox" data-refund ${st.refund ? 'checked' : ''}><span></span></span></label>`;
+    }
     if (task.type === 'custom')
       f += `<label class="field"><span>Сумма бонуса, ₪</span><input class="input" inputmode="decimal" data-amount placeholder="например, 50" value="${h(st.amount)}"></label>`;
     f += `<label class="field"><span>${task.noteRequired ? 'Что именно сделано' : 'Комментарий (необязательно)'}</span><textarea class="input" data-note maxlength="300" placeholder="${
@@ -704,6 +760,8 @@ function openAddSheet(task, forMember) {
           };
         };
         upd('[data-receipt]', 'receipt');
+        const rf = $('[data-refund]', box);
+        if (rf) rf.onchange = () => (st.refund = rf.checked);
         upd('[data-amount]', 'amount');
         const note = $('[data-note]', box);
         note.oninput = () => (st.note = note.value);
@@ -720,8 +778,21 @@ function openAddSheet(task, forMember) {
               amount: st.amount,
               note: st.note,
             });
+            let extra = '';
+            if (st.refund && task.type === 'percent') {
+              try {
+                await api('POST', '/api/expenses', {
+                  date: st.date,
+                  note: st.note,
+                  items: [{ cat: 'groceries', desc: 'Чек из магазина', amount: st.receipt }],
+                });
+                extra = ` · 🧾 чек ${money(Math.round(Number(st.receipt) * 100))} отправлен на возмещение`;
+              } catch (err) {
+                toast('Дело отмечено, но запрос на возмещение не отправился: ' + err.message, true);
+              }
+            }
             closeSheet();
-            toast(`${task.icon} Отмечено: +${money(Math.round(calc() * 100))}`);
+            toast(`${task.icon} Отмечено: +${money(Math.round(calc() * 100))}${extra}`);
             confetti(promoOn(task) ? 70 : 36);
             await refresh();
           } catch (err) {
@@ -862,10 +933,12 @@ function records(K) {
 function viewHistory(v) {
   const mine = S.entries.filter((e) => e.memberId === S.me.id).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   const unpaid = mine.filter((e) => !e.payoutId);
+  const o = owedOf(S.me.id);
   const pays = S.payouts.filter((p) => p.memberId === S.me.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   v.innerHTML = `
-    <section class="card"><div class="card-head"><h2 class="card-title">Ожидает выплаты</h2><b class="num">${money(sum(unpaid))}</b></div>
+    <section class="card"><div class="card-head"><h2 class="card-title">Ожидает выплаты</h2><b class="num">${money(o.total)}</b></div>
       ${feed(unpaid, { showWho: false, deletable: true })}
+      ${o.r.length ? `<div class="section-label" style="margin:14px 0 6px">Одобренные возмещения</div>${expMiniList(o.r)}` : ''}
       ${unpaid.length ? `<div class="hint" style="margin-top:8px">Ошиблись? Невыплаченную запись можно удалить крестиком.</div>` : ''}
     </section>
     <section class="card"><div class="card-head"><h2 class="card-title">Полученные выплаты</h2><span class="card-note">${pays.length}</span></div>
@@ -874,7 +947,7 @@ function viewHistory(v) {
           ? `<ul class="feed">${pays
               .map(
                 (p) => `<li><div class="feed-icon">💸</div><div class="feed-main"><div class="feed-title num">${money(p.amountAg)}</div>
-            <div class="feed-meta">${fmtDate(p.createdAt.slice(0, 10))} · ${tasksWord(p.count)}</div></div>
+            <div class="feed-meta">${fmtDate(p.createdAt.slice(0, 10))} · ${payoutWhat(p)}</div></div>
             <button class="btn ghost" data-payview="${h(p.id)}">Детали</button></li>`
               )
               .join('')}</ul>`
@@ -883,6 +956,7 @@ function viewHistory(v) {
     </section>`;
   bindDeletes(v);
   bindPayView(v);
+  bindExpenseActions(v);
 }
 
 function bindPayView(v) {
@@ -891,8 +965,12 @@ function bindPayView(v) {
       (b.onclick = () => {
         const p = S.payouts.find((x) => x.id === b.dataset.payview);
         const list = S.entries.filter((e) => e.payoutId === p.id).sort((a, b) => b.date.localeCompare(a.date));
+        const refunds = S.expenses.filter((x) => x.payoutId === p.id);
         openSheet(
-          `<h2>Выплата ${money(p.amountAg)}</h2><p class="lead">${h(member(p.memberId).name)} · ${fmtDate(p.createdAt.slice(0, 10), { rel: false })} · ${tasksWord(p.count)}</p>${feed(list, { showWho: false })}`
+          `<h2>Выплата ${money(p.amountAg)}</h2><p class="lead">${h(member(p.memberId).name)} · ${fmtDate(p.createdAt.slice(0, 10), { rel: false })} · ${payoutWhat(p)}</p>${
+            list.length ? feed(list, { showWho: false }) : ''
+          }${refunds.length ? `<div class="section-label" style="margin:14px 0 6px">Возмещения расходов</div>${expMiniList(refunds)}` : ''}`,
+          (sh) => bindExpenseActions(sh)
         );
       })
   );
@@ -902,20 +980,28 @@ function bindPayView(v) {
 function viewPay(v) {
   const cards = kids()
     .map((k) => {
-      const u = unpaidOf(k.id).sort((a, b) => b.date.localeCompare(a.date));
-      const total = sum(u);
-      const since = u.length ? u[u.length - 1].date : null;
+      const o = owedOf(k.id);
+      const u = o.e.sort((a, b) => b.date.localeCompare(a.date));
+      const total = o.total;
+      const any = u.length || o.r.length;
+      const since = [...u.map((e) => e.date), ...o.r.map((x) => x.date)].sort()[0];
       const open = S.openDetails[k.id];
       return `<section class="card c-${h(k.id)}">
         <div class="pay-head">${avatar(k, 'lg')}<div class="grow"><div class="eyebrow">${h(k.name)} · к выплате</div>
           <div class="pay-sum num">${money(total)}</div>
-          <div class="hint">${u.length ? `${tasksWord(u.length)} · с ${fmtDate(since)}` : 'Всё выплачено'}</div></div></div>
+          <div class="hint">${any ? `${owedLine(o)} · с ${fmtDate(since)}` : 'Всё выплачено'}</div></div></div>
         <div class="pay-actions">
-          ${isParent() ? `<button class="btn primary" data-payout="${h(k.id)}" ${u.length ? '' : 'disabled'}>Выплачено — обнулить</button>` : ''}
-          <button class="btn" data-toggle="${h(k.id)}" ${u.length ? '' : 'disabled'}>${open ? 'Скрыть детали' : 'Детали'}</button>
+          ${isParent() ? `<button class="btn primary" data-payout="${h(k.id)}" ${any ? '' : 'disabled'}>Выплачено — обнулить</button>` : ''}
+          <button class="btn" data-toggle="${h(k.id)}" ${any ? '' : 'disabled'}>${open ? 'Скрыть детали' : 'Детали'}</button>
           ${isParent() ? `<button class="btn ghost" data-addfor="${h(k.id)}">+ Дело или бонус</button>` : ''}
         </div>
-        ${open && u.length ? `<div class="details">${feed(u, { showWho: false, deletable: isParent() })}</div>` : ''}
+        ${
+          open && any
+            ? `<div class="details">${u.length ? feed(u, { showWho: false, deletable: isParent() }) : ''}${
+                o.r.length ? `<div class="section-label" style="margin:14px 0 6px">Возмещения расходов · ${money(o.refund)}</div>${expMiniList(o.r)}` : ''
+              }</div>`
+            : ''
+        }
       </section>`;
     })
     .join('');
@@ -930,7 +1016,7 @@ function viewPay(v) {
             .map((p) => {
               const m = member(p.memberId);
               return `<li>${avatar(m, 'sm')}<div class="feed-main"><div class="feed-title num">${money(p.amountAg)}</div>
-            <div class="feed-meta">${h(m.name)} · ${fmtDate(p.createdAt.slice(0, 10))} · ${tasksWord(p.count)}</div></div>
+            <div class="feed-meta">${h(m.name)} · ${fmtDate(p.createdAt.slice(0, 10))} · ${payoutWhat(p)}</div></div>
             <button class="btn ghost" data-payview="${h(p.id)}">Детали</button>
             ${isParent() ? `<button class="icon-btn" data-undo="${h(p.id)}" title="Отменить выплату" aria-label="Отменить выплату">↺</button>` : ''}</li>`;
             })
@@ -944,10 +1030,13 @@ function viewPay(v) {
     (b) =>
       (b.onclick = async () => {
         const k = member(b.dataset.payout);
-        const u = unpaidOf(k.id);
+        const o = owedOf(k.id);
+        const what = [o.e.length ? `${tasksWord(o.e.length)} (${money(o.chores)})` : '', o.r.length ? `${refundsWord(o.r.length)} расходов (${money(o.refund)})` : '']
+          .filter(Boolean)
+          .join(' и ');
         const ok = await confirmSheet({
-          title: `Выплатить ${money(sum(u))}?`,
-          text: `${h(k.name)} получает деньги за ${tasksWord(u.length)}. Сумма обнулится, записи уйдут в историю выплат. Если ошиблись — выплату можно отменить.`,
+          title: `Выплатить ${money(o.total)}?`,
+          text: `${h(k.name)} получает деньги за ${what}. Сумма обнулится, записи уйдут в историю выплат. Если ошиблись — выплату можно отменить.`,
           ok: 'Да, выплачено',
         });
         if (!ok) return;
@@ -955,7 +1044,7 @@ function viewPay(v) {
           await api('POST', '/api/payouts', { memberId: k.id });
           S.openDetails[k.id] = false;
           await refresh();
-          toast(`💸 ${k.name}: выплачено ${money(sum(u))}`);
+          toast(`💸 ${k.name}: выплачено ${money(o.total)}`);
           confetti(50);
         } catch (err) {
           toast(err.message, true);
@@ -984,6 +1073,7 @@ function viewPay(v) {
   );
   bindDeletes(v);
   bindPayView(v);
+  bindExpenseActions(v);
 }
 
 function openTaskPicker(memberId) {
@@ -1238,6 +1328,440 @@ function viewTasks(v) {
       .join('')}</ul></section>`;
 }
 
+// ================= Расходы и возмещения =================
+function payoutWhat(p) {
+  const n = (p.expenseIds || []).length;
+  return [p.count ? tasksWord(p.count) : '', n ? `${refundsWord(n)} 🧾` : ''].filter(Boolean).join(' + ');
+}
+
+function expTitle(x) {
+  if (x.title) return x.title;
+  if (x.items.length === 1) return x.items[0].desc || expCat(x.items[0].cat).name;
+  return `Расходы: ${itemsWord(x.items.length)}`;
+}
+
+function expIcon(x) {
+  const cats = [...new Set(x.items.map((i) => i.cat))];
+  return cats.length === 1 ? expCat(cats[0]).icon : '🧾';
+}
+
+function expStatus(x) {
+  if (x.payoutId) return '<span class="status paid">Выплачено</span>';
+  if (x.status === 'pending') return '<span class="status pend">На проверке</span>';
+  if (x.status === 'rejected') return '<span class="status rej">Отклонено</span>';
+  return `<span class="status wait">${x.approvedAg < x.totalAg ? 'Частично' : 'Одобрено'}</span>`;
+}
+
+function expAmount(x) {
+  if (x.status === 'rejected') return `<s class="num">${money(x.totalAg)}</s>`;
+  if (x.status === 'approved' && x.approvedAg < x.totalAg) return `<b class="num">${money(x.approvedAg)}</b><s class="num">${money(x.totalAg)}</s>`;
+  return `<b class="num">${money(x.status === 'approved' ? x.approvedAg : x.totalAg)}</b>`;
+}
+
+// Горизонтальные полоски по категориям — видно, на что ушли деньги
+function catBars(items, valueOf = (i) => i.amountAg) {
+  const groups = {};
+  items.forEach((i) => (groups[i.cat] = (groups[i.cat] || 0) + valueOf(i)));
+  const rows = Object.entries(groups).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  if (!rows.length) return '';
+  const max = rows[0][1];
+  return `<div class="cat-bars">${rows
+    .map(([c, v]) => {
+      const cat = expCat(c);
+      return `<div class="cat-bar"><span class="cb-label">${cat.icon} ${h(cat.name)}</span><span class="cb-track"><i style="width:${Math.max(2, (v / max) * 100)}%"></i></span><b class="num">${money(v)}</b></div>`;
+    })
+    .join('')}</div>`;
+}
+
+function itemsTable(x) {
+  const decided = x.status === 'approved';
+  return `<ul class="exp-lines">${x.items
+    .map((i) => {
+      const cat = expCat(i.cat);
+      const cut = decided && i.approvedAg !== null && i.approvedAg < i.amountAg;
+      return `<li><span>${cat.icon}</span><span class="grow">${h(i.desc || cat.name)}${i.desc ? `<small>${h(cat.name)}</small>` : ''}</span>${
+        cut ? `<span class="num"><s>${money(i.amountAg)}</s> ${money(i.approvedAg)}</span>` : `<span class="num">${money(i.amountAg)}</span>`
+      }</li>`;
+    })
+    .join('')}</ul>`;
+}
+
+function photoThumbs(x) {
+  if (!x.photos || !x.photos.length) return '';
+  return `<div class="thumbs">${x.photos
+    .map((pid) => `<button class="thumb" data-photo="${h(pid)}" aria-label="Открыть фото"><img src="/api/receipts/${h(pid)}" alt="Фото чека" loading="lazy"></button>`)
+    .join('')}</div>`;
+}
+
+function expCard(x, { showWho = true } = {}) {
+  const m = member(x.memberId);
+  const multi = x.items.length > 1;
+  const mine = x.memberId === S.me.id;
+  const actions = [];
+  if (isParent() && x.status === 'pending') actions.push(`<button class="btn primary" data-review="${h(x.id)}">Проверить</button>`);
+  if (isParent() && x.status !== 'pending' && !x.payoutId) actions.push(`<button class="btn ghost" data-reopen="${h(x.id)}">Вернуть на проверку</button>`);
+  if (mine && x.status === 'pending') actions.push(`<button class="btn ghost" data-expdel="${h(x.id)}">Отменить запрос</button>`);
+  return `<article class="exp c-${h(m.id)}">
+    <div class="exp-head">
+      <div class="feed-icon">${expIcon(x)}</div>
+      <div class="grow"><div class="feed-title">${h(expTitle(x))}</div>
+        <div class="feed-meta">${showWho ? `<span class="dot" style="width:8px;height:8px"></span> ${h(m.name)} · ` : ''}${fmtDate(x.date)}${
+          multi ? ` · ${itemsWord(x.items.length)}` : x.items[0].desc ? ` · ${h(expCat(x.items[0].cat).name)}` : ''
+        }</div></div>
+      <div class="exp-amt">${expAmount(x)}${expStatus(x)}</div>
+    </div>
+    ${multi ? catBars(x.items) + `<details class="exp-more"><summary>Все позиции</summary>${itemsTable(x)}</details>` : ''}
+    ${!multi && x.status === 'approved' && x.approvedAg < x.totalAg ? `<div class="feed-meta">Возмещается ${money(x.approvedAg)} из ${money(x.totalAg)}</div>` : ''}
+    ${x.note ? `<div class="exp-note">«${h(x.note)}»</div>` : ''}
+    ${photoThumbs(x)}
+    ${x.comment ? `<div class="exp-comment">💬 <b>${h(member(x.decidedBy).name)}:</b> ${h(x.comment)}</div>` : ''}
+    ${actions.length ? `<div class="pay-actions" style="margin-top:12px">${actions.join('')}</div>` : ''}
+  </article>`;
+}
+
+function expMiniList(list) {
+  return `<ul class="feed">${list
+    .map(
+      (x) => `<li><div class="feed-icon">${expIcon(x)}</div><div class="feed-main"><div class="feed-title">${h(expTitle(x))}</div>
+      <div class="feed-meta">${fmtDate(x.date)}${x.items.length > 1 ? ` · ${itemsWord(x.items.length)}` : ''}${
+        x.approvedAg < x.totalAg ? ` · из ${money(x.totalAg)}` : ''
+      }</div>${photoThumbs(x)}</div><div class="feed-amt num">+${money(x.approvedAg)}</div></li>`
+    )
+    .join('')}</ul>`;
+}
+
+function bindExpenseActions(v) {
+  $$('[data-photo]', v).forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const lb = document.createElement('div');
+        lb.className = 'lightbox';
+        lb.innerHTML = `<img src="/api/receipts/${h(b.dataset.photo)}" alt="Фото чека"><button class="btn" aria-label="Закрыть">Закрыть</button>`;
+        lb.onclick = () => lb.remove();
+        document.body.appendChild(lb);
+      })
+  );
+  $$('[data-review]', v).forEach((b) => (b.onclick = () => openReview(S.expenses.find((x) => x.id === b.dataset.review))));
+  $$('[data-reopen]', v).forEach(
+    (b) =>
+      (b.onclick = async () => {
+        try {
+          await api('POST', `/api/expenses/${b.dataset.reopen}/reopen`);
+          await refresh();
+          toast('Запрос снова на проверке');
+        } catch (err) {
+          toast(err.message, true);
+        }
+      })
+  );
+  $$('[data-expdel]', v).forEach(
+    (b) =>
+      (b.onclick = async () => {
+        const ok = await confirmSheet({ title: 'Отменить запрос?', text: 'Запрос и прикреплённые фото будут удалены.', ok: 'Отменить запрос', danger: true });
+        if (!ok) return;
+        try {
+          await api('DELETE', '/api/expenses/' + b.dataset.expdel);
+          await refresh();
+          toast('Запрос отменён');
+        } catch (err) {
+          toast(err.message, true);
+        }
+      })
+  );
+}
+
+function viewExpenses(v) {
+  const child = isChild();
+  const scope = child ? S.me.id : S.expFilter;
+  const all = S.expenses.filter((x) => scope === 'all' || x.memberId === scope).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const pending = all.filter((x) => x.status === 'pending');
+  const approved = all.filter((x) => x.status === 'approved' && !x.payoutId);
+  const archive = all.filter((x) => x.payoutId || x.status === 'rejected').slice(0, 30);
+
+  // Сводка за текущий месяц
+  const month = S.today.slice(0, 7);
+  const monthList = all.filter((x) => x.date.slice(0, 7) === month && x.status !== 'rejected');
+  const monthItems = monthList.flatMap((x) => x.items);
+  const asked = sumTotal(monthList);
+  const got = sumApproved(monthList.filter((x) => x.status === 'approved'));
+  const [y, mo] = month.split('-').map(Number);
+  const monthName = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'][mo - 1];
+
+  const filter = child
+    ? ''
+    : `<div class="row"><div class="seg"><button data-ef="all" class="${S.expFilter === 'all' ? 'on' : ''}">Все</button>${kids()
+        .map((k) => `<button data-ef="${h(k.id)}" class="${S.expFilter === k.id ? 'on' : ''}">${h(k.name)}</button>`)
+        .join('')}</div></div>`;
+
+  const section = (title, list, note = '', empty = '') =>
+    list.length || empty
+      ? `<div class="section-label">${title}${note ? ` <span style="text-transform:none;letter-spacing:0;font-weight:500">· ${note}</span>` : ''}</div>${
+          list.length ? list.map((x) => expCard(x, { showWho: !child })).join('') : `<div class="card empty">${empty}</div>`
+        }`
+      : '';
+
+  v.innerHTML = `
+    ${
+      child
+        ? `<section class="card exp-intro"><div class="row"><div class="grow"><h2 class="card-title">Потратил(а) свои деньги на семью?</h2>
+          <div class="hint" style="margin-top:4px">Квартира, счета, продукты, проездной, выписка по карте — отправь запрос, ${h(parentName())} проверит и добавит сумму к выплате.</div></div></div>
+          <button class="btn primary block" style="margin-top:14px" id="newexp">+ Запрос на возмещение</button></section>`
+        : filter
+    }
+    <section class="card"><div class="card-head"><h2 class="card-title">${monthName[0].toUpperCase() + monthName.slice(1)} ${y}</h2><span class="card-note">${
+      child ? 'мои расходы' : scope === 'all' ? 'вся семья' : h(member(scope).name)
+    }</span></div>
+      <div class="split" style="margin-top:0"><div class="split-item"><div><b class="num">${money(asked)}</b><span>запрошено</span></div></div>
+        <div class="split-item"><div><b class="num">${money(got)}</b><span>одобрено</span></div></div></div>
+      ${monthItems.length ? `<div style="margin-top:14px">${catBars(monthItems)}</div>` : `<div class="empty">В этом месяце расходов нет</div>`}
+    </section>
+    ${section(isParent() ? 'Ждут проверки' : 'На проверке', pending, pending.length ? money(sumTotal(pending)) : '', isParent() ? 'Новых запросов нет 🎉' : '')}
+    ${section('Одобрено — ждёт выплаты', approved, approved.length ? money(sumApproved(approved)) : '')}
+    ${section('Архив', archive)}`;
+
+  $$('[data-ef]', v).forEach((b) => (b.onclick = () => ((S.expFilter = b.dataset.ef), renderApp())));
+  const nb = $('#newexp', v);
+  if (nb) nb.onclick = () => openExpenseSheet();
+  bindExpenseActions(v);
+}
+
+async function toJpeg(file, max = 1600, q = 0.75) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('Не удалось открыть фото'));
+      i.src = url;
+    });
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k);
+    c.height = Math.round(img.naturalHeight * k);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', q);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+const EXP_TEMPLATES = [
+  { label: '🏠 Квартира', cat: 'rent' },
+  { label: '💡 Электричество', cat: 'electricity' },
+  { label: '🛒 Продукты', cat: 'groceries' },
+  { label: '🚌 Проездной', cat: 'transport', desc: 'Проездной' },
+  { label: '👟 Одежда', cat: 'clothes' },
+  { label: '💳 Выписка по карте', cat: 'card', multi: true },
+];
+
+function openExpenseSheet(prefill = {}) {
+  const newItem = (cat = 'other', desc = '', amount = '') => ({ cat, desc, amount });
+  const st = {
+    title: prefill.title || '',
+    date: prefill.date || S.today,
+    note: '',
+    items: prefill.items || [newItem()],
+    photos: [],
+  };
+  const n = dn(S.today);
+  const total = () => st.items.reduce((s, i) => s + (Number(String(i.amount).replace(',', '.')) || 0), 0);
+  const catOptions = (sel) => EXP_CATS.map((c) => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${c.icon} ${h(c.name)}</option>`).join('');
+
+  const paint = (sh) => {
+    const box = $('[data-body]', sh);
+    box.innerHTML = `
+      <div class="field"><span>Быстрый старт</span><div class="pills">${EXP_TEMPLATES.map(
+        (t, i) => `<button type="button" class="pill" data-tpl="${i}">${t.label}</button>`
+      ).join('')}</div></div>
+      <label class="field"><span>Название (необязательно)</span><input class="input" data-title maxlength="60" placeholder="Например: Мастеркард, ноябрь" value="${h(st.title)}"></label>
+      <div class="field"><span>${st.items.length > 1 ? 'Позиции' : 'На что потрачено'}</span>
+        <div class="exp-rows">${st.items
+          .map(
+            (it, i) => `<div class="exp-row">
+            <select class="input" data-cat="${i}" aria-label="Категория">${catOptions(it.cat)}</select>
+            <input class="input num" data-amt="${i}" inputmode="decimal" placeholder="₪" value="${h(it.amount)}" aria-label="Сумма">
+            ${st.items.length > 1 ? `<button type="button" class="icon-btn" data-rm="${i}" aria-label="Убрать позицию">${I.x}</button>` : '<span></span>'}
+            <input class="input exp-desc" data-desc="${i}" maxlength="120" placeholder="Что именно (необязательно)" value="${h(it.desc)}">
+          </div>`
+          )
+          .join('')}</div>
+        <button type="button" class="btn ghost" data-additem style="justify-self:start">+ Ещё позиция</button>
+      </div>
+      <div class="field"><span>Когда</span><div class="pills">${[
+        [S.today, 'Сегодня'],
+        [nd(n - 1), 'Вчера'],
+      ]
+        .map(([d, l]) => `<button type="button" class="pill ${st.date === d ? 'on' : ''}" data-date="${d}">${l}</button>`)
+        .join('')}<input type="date" class="input" style="width:auto;padding:6px 10px" value="${st.date}" max="${S.today}" min="${nd(n - 120)}" data-datepick></div></div>
+      <div class="field"><span>Фото чека или выписки (до 3)</span>
+        <div class="thumbs">${st.photos
+          .map((p, i) => `<span class="thumb"><img src="${p}" alt=""><button type="button" data-rmphoto="${i}" aria-label="Убрать фото">${I.x}</button></span>`)
+          .join('')}${
+      st.photos.length < 3
+        ? `<label class="thumb add">📷<span>Добавить</span><input type="file" accept="image/*" multiple data-file hidden></label>`
+        : ''
+    }</div></div>
+      <label class="field"><span>Комментарий для ${h(parentName())} (необязательно)</span><textarea class="input" data-note maxlength="300">${h(st.note)}</textarea></label>
+      <div class="total-line"><span>К возмещению</span><b class="num" data-total>${money(Math.round(total() * 100))}</b></div>
+      <button class="btn primary block" data-save>Отправить на проверку</button>`;
+
+    const upTotal = () => ($('[data-total]', box).textContent = money(Math.round(total() * 100)));
+    $('[data-title]', box).oninput = (e) => (st.title = e.target.value);
+    $('[data-note]', box).oninput = (e) => (st.note = e.target.value);
+    $$('[data-cat]', box).forEach((el) => (el.onchange = () => (st.items[el.dataset.cat].cat = el.value)));
+    $$('[data-amt]', box).forEach(
+      (el) =>
+        (el.oninput = () => {
+          st.items[el.dataset.amt].amount = el.value;
+          upTotal();
+        })
+    );
+    $$('[data-desc]', box).forEach((el) => (el.oninput = () => (st.items[el.dataset.desc].desc = el.value)));
+    $$('[data-rm]', box).forEach((b) => (b.onclick = () => (st.items.splice(Number(b.dataset.rm), 1), paint(sh))));
+    $('[data-additem]', box).onclick = () => {
+      const last = st.items[st.items.length - 1];
+      st.items.push(newItem(last ? last.cat : 'other'));
+      paint(sh);
+      const amts = $$('[data-amt]', box);
+      amts[amts.length - 1].focus();
+    };
+    $$('[data-tpl]', box).forEach(
+      (b) =>
+        (b.onclick = () => {
+          const t = EXP_TEMPLATES[Number(b.dataset.tpl)];
+          const filled = st.items.filter((i) => i.amount || i.desc);
+          if (t.multi) {
+            st.title = st.title || 'Выписка по карте';
+            if (!filled.length) st.items = [newItem('groceries'), newItem('transport'), newItem('fun')];
+          } else if (filled.length <= 1) {
+            st.items = [newItem(t.cat, t.desc || (filled[0] && filled[0].desc) || '', (filled[0] && filled[0].amount) || '')];
+          } else st.items.push(newItem(t.cat, t.desc || ''));
+          paint(sh);
+        })
+    );
+    $$('[data-date]', box).forEach((b) => (b.onclick = () => ((st.date = b.dataset.date), paint(sh))));
+    $('[data-datepick]', box).onchange = (e) => e.target.value && ((st.date = e.target.value), paint(sh));
+    $$('[data-rmphoto]', box).forEach((b) => (b.onclick = () => (st.photos.splice(Number(b.dataset.rmphoto), 1), paint(sh))));
+    const file = $('[data-file]', box);
+    if (file)
+      file.onchange = async () => {
+        for (const f of [...file.files].slice(0, 3 - st.photos.length)) {
+          try {
+            st.photos.push(await toJpeg(f));
+          } catch (err) {
+            toast(err.message, true);
+          }
+        }
+        paint(sh);
+      };
+    $('[data-save]', box).onclick = async (e) => {
+      const items = st.items.filter((i) => i.amount || i.desc);
+      if (!items.length) return toast('Укажите хотя бы одну сумму', true);
+      e.target.disabled = true;
+      e.target.textContent = 'Отправляю…';
+      try {
+        await api('POST', '/api/expenses', { title: st.title, date: st.date, note: st.note, items, photos: st.photos });
+        closeSheet();
+        toast(`🧾 Запрос на ${money(Math.round(total() * 100))} отправлен`);
+        S.tab = 'expenses';
+        await refresh();
+      } catch (err) {
+        toast(err.message, true);
+        e.target.disabled = false;
+        e.target.textContent = 'Отправить на проверку';
+      }
+    };
+  };
+  openSheet(`<h2>Запрос на возмещение</h2><p class="lead">Одна трата или сразу много мелких — каждую позицию можно отнести к своей категории.</p><div class="stack" data-body></div>`, paint);
+}
+
+function openReview(x) {
+  const m = member(x.memberId);
+  const st = { items: x.items.map((i) => ({ id: i.id, on: true, val: i.amountAg / 100 })), comment: '' };
+  const approved = () => Math.round(st.items.reduce((s, i) => s + (i.on ? Number(String(i.val).replace(',', '.')) || 0 : 0), 0) * 100);
+  const paint = (sh) => {
+    const box = $('[data-body]', sh);
+    box.innerHTML = `
+      <div class="row">${avatar(m)}<div class="grow"><b>${h(m.name)}</b><div class="hint">${fmtDate(x.date, { rel: false })} · отправлено ${fmtDate(
+      x.createdAt.slice(0, 10)
+    )}</div></div><b class="num" style="font-size:18px">${money(x.totalAg)}</b></div>
+      ${x.note ? `<div class="exp-note">«${h(x.note)}»</div>` : ''}
+      ${photoThumbs(x)}
+      <div class="field"><span>Сколько возместить</span><div class="pills">
+        <button type="button" class="pill" data-all="1">Всё 100%</button><button type="button" class="pill" data-all="0.5">Всё 50%</button></div></div>
+      <div class="review-rows">${x.items
+        .map((it, i) => {
+          const cat = expCat(it.cat);
+          const r = st.items[i];
+          return `<div class="review-row ${r.on ? '' : 'off'}">
+            <label class="switch"><input type="checkbox" data-on="${i}" ${r.on ? 'checked' : ''}><span></span></label>
+            <div class="grow"><div style="font-weight:600">${cat.icon} ${h(it.desc || cat.name)}</div><div class="hint">${it.desc ? h(cat.name) + ' · ' : ''}запрошено ${money(it.amountAg)}</div></div>
+            <div class="row" style="gap:4px"><button type="button" class="pill" data-half="${i}" ${r.on ? '' : 'disabled'}>½</button>
+            <input class="input small num" data-val="${i}" inputmode="decimal" value="${r.on ? h(r.val) : 0}" ${r.on ? '' : 'disabled'}></div>
+          </div>`;
+        })
+        .join('')}</div>
+      <label class="field"><span>Комментарий (увидит ${h(m.name)})</span><input class="input" data-comment maxlength="300" placeholder="Например: кроссовки — половину, остальное сам(а)" value="${h(
+        st.comment
+      )}"></label>
+      <div class="total-line"><span>Возместить</span><b class="num" data-appr>${money(approved())}</b></div>
+      <button class="btn primary block" data-approve>Подтвердить — добавить к выплате</button>
+      <button class="btn danger block" data-reject>Отклонить</button>`;
+    const up = () => ($('[data-appr]', box).textContent = money(approved()));
+    $$('[data-on]', box).forEach((el) => (el.onchange = () => ((st.items[el.dataset.on].on = el.checked), paint(sh))));
+    $$('[data-val]', box).forEach(
+      (el) =>
+        (el.oninput = () => {
+          const it = x.items[el.dataset.val];
+          let v = Number(el.value.replace(',', '.')) || 0;
+          if (v * 100 > it.amountAg) {
+            v = it.amountAg / 100;
+            el.value = v;
+          }
+          st.items[el.dataset.val].val = v;
+          up();
+        })
+    );
+    $$('[data-half]', box).forEach(
+      (b) => (b.onclick = () => ((st.items[b.dataset.half].val = Math.round(x.items[b.dataset.half].amountAg / 2) / 100), paint(sh)))
+    );
+    $$('[data-all]', box).forEach(
+      (b) =>
+        (b.onclick = () => {
+          const k = Number(b.dataset.all);
+          st.items.forEach((r, i) => ((r.on = true), (r.val = Math.round(x.items[i].amountAg * k) / 100)));
+          paint(sh);
+        })
+    );
+    $('[data-comment]', box).oninput = (e) => (st.comment = e.target.value);
+    const decide = async (action, btn) => {
+      btn.disabled = true;
+      try {
+        await api('POST', `/api/expenses/${x.id}/decision`, {
+          action,
+          comment: st.comment,
+          items: st.items.map((r) => ({ id: r.id, approved: r.on ? r.val : 0 })),
+        });
+        closeSheet();
+        toast(action === 'approve' ? `✅ ${m.name}: ${money(approved())} добавлено к выплате` : 'Запрос отклонён');
+        await refresh();
+      } catch (err) {
+        toast(err.message, true);
+        btn.disabled = false;
+      }
+    };
+    $('[data-approve]', box).onclick = (e) => decide('approve', e.target);
+    $('[data-reject]', box).onclick = (e) => decide('reject', e.target);
+    bindExpenseActions(box);
+  };
+  openSheet(`<h2>${expIcon(x)} ${h(expTitle(x))}</h2><p class="lead">Проверьте позиции и решите, сколько возместить.</p><div class="stack" data-body></div>`, paint);
+}
+
 // ================= Мелкие радости =================
 function daypart() {
   const hr = new Date().getHours();
@@ -1314,6 +1838,13 @@ function startEvents() {
     if (data.kind === 'payout' && data.memberId === S.me.id) {
       toast(`💸 Выплата: ${money(data.amountAg)}!`);
       confetti(60);
+    }
+    if (data.kind === 'expense' && !isChild()) toast(`🧾 ${who}: запрос на возмещение ${money(data.amountAg)}`);
+    if (data.kind === 'expense-decided' && data.memberId === S.me.id) {
+      if (data.status === 'approved') {
+        toast(data.amountAg < data.totalAg ? `✅ ${who} возместит ${money(data.amountAg)} из ${money(data.totalAg)}` : `✅ ${who} одобрил(а) возмещение ${money(data.amountAg)}`);
+        confetti(30);
+      } else toast(`Запрос на возмещение ${money(data.totalAg)} отклонён`, true);
     }
     if (data.kind === 'promo') toast(`🔥 Горящее предложение: ${data.text} — ${unitLabel({ type: data.type }, data.price)}`);
     if (data.kind === 'react' && data.on && data.memberId === S.me.id) toast(`${who}: ${data.emoji} за «${data.text}»`);

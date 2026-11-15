@@ -40,6 +40,11 @@ const DEFAULT_TASKS = [
 
 const REACTIONS = ['👏', '❤️', '🔥', '😂'];
 
+// Категории расходов, которые дети могут попросить возместить
+const EXPENSE_CATS = ['rent', 'electricity', 'water', 'internet', 'groceries', 'transport', 'clothes', 'health', 'study', 'card', 'fun', 'other'];
+const RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
+const MAX_PHOTOS = 3;
+
 const DEFAULT_MEMBERS = [
   { id: 'dad', name: 'Папа', role: 'parent' },
   { id: 'mom', name: 'Мама', role: 'viewer' },
@@ -57,6 +62,7 @@ function freshDb() {
     members: DEFAULT_MEMBERS.map((m) => ({ ...m })),
     tasks: DEFAULT_TASKS.map((t) => ({ active: true, weekly: false, noteRequired: false, parentOnly: false, ...t })),
     entries: [],
+    expenses: [],
     payouts: [],
     sessions: {},
   };
@@ -73,6 +79,7 @@ function loadDb() {
       }
     }
     db.sessions ||= {};
+    db.expenses ||= [];
     // Миграция: добавляем новых участников (например, маму) на свои места
     DEFAULT_MEMBERS.forEach((m, i) => {
       if (!db.members.find((x) => x.id === m.id)) db.members.splice(i, 0, { ...m });
@@ -99,6 +106,7 @@ function syncDb() {
     if (m !== dbMtime) {
       db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
       db.sessions ||= {};
+      db.expenses ||= [];
       dbMtime = m;
     }
   } catch (e) {
@@ -220,7 +228,7 @@ function readBody(req) {
     const chunks = [];
     req.on('data', (c) => {
       size += c.length;
-      if (size > 1e6) {
+      if (size > 8e6) {
         reject(new Error('too large'));
         req.destroy();
       } else chunks.push(c);
@@ -287,6 +295,7 @@ function statePayload(me) {
     members: db.members.map(publicMember),
     tasks: db.tasks,
     entries: db.entries,
+    expenses: db.expenses,
     payouts: db.payouts,
   };
 }
@@ -533,23 +542,149 @@ async function api(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
+  // ---------- Расходы и возмещения ----------
+  if (route === 'POST /api/expenses') {
+    if (me.role !== 'child') return fail(res, 403, 'Запрос на возмещение отправляют дети');
+    const b = await readBody(req);
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!items.length) return fail(res, 400, 'Добавьте хотя бы одну позицию');
+    if (items.length > 40) return fail(res, 400, 'Слишком много позиций');
+    const clean = [];
+    for (const it of items) {
+      if (!EXPENSE_CATS.includes(it.cat)) return fail(res, 400, 'Выберите категорию');
+      const amount = parsePrice(it.amount);
+      if (!amount) return fail(res, 400, 'Укажите сумму у каждой позиции');
+      clean.push({ id: id(), cat: it.cat, desc: String(it.desc || '').trim().slice(0, 120), amountAg: Math.round(amount * 100), approvedAg: null });
+    }
+    const today = todayStr();
+    const date = b.date || today;
+    if (!isDate(date) || dayNum(date) > dayNum(today) + 1 || dayNum(today) - dayNum(date) > 120) return fail(res, 400, 'Дата — в пределах последних 4 месяцев');
+    const photos = Array.isArray(b.photos) ? b.photos.slice(0, MAX_PHOTOS) : [];
+    const photoIds = [];
+    for (const ph of photos) {
+      const mt = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(ph));
+      if (!mt) return fail(res, 400, 'Фото должно быть в формате JPEG');
+      const buf = Buffer.from(mt[1], 'base64');
+      if (buf.length > 2.5e6 || buf[0] !== 0xff || buf[1] !== 0xd8) return fail(res, 400, 'Фото не подходит');
+      const pid = id();
+      fs.mkdirSync(RECEIPTS_DIR, { recursive: true });
+      fs.writeFileSync(path.join(RECEIPTS_DIR, pid + '.jpg'), buf);
+      photoIds.push(pid);
+    }
+    const x = {
+      id: id(),
+      memberId: me.id,
+      title: String(b.title || '').trim().slice(0, 60),
+      note: String(b.note || '').trim().slice(0, 300),
+      date,
+      items: clean,
+      totalAg: clean.reduce((s, i) => s + i.amountAg, 0),
+      photos: photoIds,
+      status: 'pending',
+      approvedAg: 0,
+      comment: '',
+      createdAt: new Date().toISOString(),
+      decidedAt: null,
+      decidedBy: null,
+      payoutId: null,
+    };
+    db.expenses.push(x);
+    saveDb();
+    broadcast({ kind: 'expense', by: me.id, memberId: me.id, amountAg: x.totalAg });
+    return send(res, 200, { ok: true, expense: x });
+  }
+
+  if ((m = url.pathname.match(/^\/api\/expenses\/([a-f0-9]+)(\/decision|\/reopen)?$/))) {
+    const x = db.expenses.find((e) => e.id === m[1]);
+    if (!x) return fail(res, 404, 'Запрос не найден');
+    const action = m[2];
+
+    if (req.method === 'DELETE' && !action) {
+      if (x.payoutId) return fail(res, 409, 'Уже выплачено — сначала отмените выплату');
+      if (!isParent && !(x.memberId === me.id && x.status === 'pending')) return fail(res, 403, 'Отменить можно только свой запрос, пока он на проверке');
+      for (const pid of x.photos || []) fs.rm(path.join(RECEIPTS_DIR, pid + '.jpg'), () => {});
+      db.expenses.splice(db.expenses.indexOf(x), 1);
+      saveDb();
+      broadcast({ kind: 'expense-deleted', by: me.id, memberId: x.memberId });
+      return send(res, 200, { ok: true });
+    }
+
+    if (req.method === 'POST' && action === '/decision') {
+      if (!isParent) return fail(res, 403, 'Только для родителя');
+      if (x.payoutId) return fail(res, 409, 'Уже выплачено');
+      const b = await readBody(req);
+      x.comment = String(b.comment || '').trim().slice(0, 300);
+      if (b.action === 'reject') {
+        x.status = 'rejected';
+        x.approvedAg = 0;
+        for (const it of x.items) it.approvedAg = 0;
+      } else if (b.action === 'approve') {
+        const map = new Map((Array.isArray(b.items) ? b.items : []).map((i) => [i.id, i.approved]));
+        let total = 0;
+        for (const it of x.items) {
+          let v = map.has(it.id) ? parsePrice(map.get(it.id)) : it.amountAg / 100;
+          if (v === null) return fail(res, 400, 'Неверная сумма');
+          v = Math.min(Math.round(v * 100), it.amountAg);
+          it.approvedAg = v;
+          total += v;
+        }
+        if (!total) return fail(res, 400, 'Сумма к возмещению 0 — лучше нажать «Отклонить»');
+        x.status = 'approved';
+        x.approvedAg = total;
+      } else return fail(res, 400, 'Неизвестное действие');
+      x.decidedAt = new Date().toISOString();
+      x.decidedBy = me.id;
+      saveDb();
+      broadcast({ kind: 'expense-decided', by: me.id, memberId: x.memberId, status: x.status, amountAg: x.approvedAg, totalAg: x.totalAg });
+      return send(res, 200, { ok: true });
+    }
+
+    if (req.method === 'POST' && action === '/reopen') {
+      if (!isParent) return fail(res, 403, 'Только для родителя');
+      if (x.payoutId) return fail(res, 409, 'Уже выплачено — сначала отмените выплату');
+      x.status = 'pending';
+      x.approvedAg = 0;
+      x.decidedAt = null;
+      x.decidedBy = null;
+      for (const it of x.items) it.approvedAg = null;
+      saveDb();
+      broadcast({ kind: 'expense-reopened', by: me.id, memberId: x.memberId });
+      return send(res, 200, { ok: true });
+    }
+    return fail(res, 405, 'method not allowed');
+  }
+
+  if (req.method === 'GET' && (m = url.pathname.match(/^\/api\/receipts\/([a-f0-9]{16})$/))) {
+    const owner = db.expenses.find((x) => (x.photos || []).includes(m[1]));
+    if (!owner) return fail(res, 404, 'Фото не найдено');
+    return fs.readFile(path.join(RECEIPTS_DIR, m[1] + '.jpg'), (err, buf) => {
+      if (err) return fail(res, 404, 'Фото не найдено');
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable' });
+      res.end(buf);
+    });
+  }
+
   if (route === 'POST /api/payouts') {
     if (!isParent) return fail(res, 403, 'Только для родителя');
     const b = await readBody(req);
     const child = db.members.find((x) => x.id === b.memberId && x.role === 'child');
     if (!child) return fail(res, 400, 'Неизвестный участник');
     const unpaid = db.entries.filter((e) => e.memberId === child.id && !e.payoutId);
-    if (!unpaid.length) return fail(res, 400, 'Нечего выплачивать');
+    const refunds = db.expenses.filter((x) => x.memberId === child.id && x.status === 'approved' && !x.payoutId);
+    if (!unpaid.length && !refunds.length) return fail(res, 400, 'Нечего выплачивать');
     const payout = {
       id: id(),
       memberId: child.id,
-      amountAg: unpaid.reduce((s, e) => s + e.amountAg, 0),
+      amountAg: unpaid.reduce((s, e) => s + e.amountAg, 0) + refunds.reduce((s, x) => s + x.approvedAg, 0),
       count: unpaid.length,
       entryIds: unpaid.map((e) => e.id),
+      expenseIds: refunds.map((x) => x.id),
+      refundAg: refunds.reduce((s, x) => s + x.approvedAg, 0),
       createdAt: new Date().toISOString(),
       note: String(b.note || '').trim().slice(0, 200),
     };
     for (const e of unpaid) e.payoutId = payout.id;
+    for (const x of refunds) x.payoutId = payout.id;
     db.payouts.push(payout);
     saveDb();
     broadcast({ kind: 'payout', by: me.id, memberId: child.id, amountAg: payout.amountAg });
@@ -562,6 +697,7 @@ async function api(req, res, url) {
     if (idx < 0) return fail(res, 404, 'Выплата не найдена');
     const p = db.payouts[idx];
     for (const e of db.entries) if (e.payoutId === p.id) e.payoutId = null;
+    for (const x of db.expenses) if (x.payoutId === p.id) x.payoutId = null;
     db.payouts.splice(idx, 1);
     saveDb();
     broadcast({ kind: 'payout-undone', by: me.id, memberId: p.memberId });
