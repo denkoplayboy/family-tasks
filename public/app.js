@@ -197,24 +197,42 @@ function toast(msg, err = false) {
   setTimeout(() => t.remove(), err ? 5000 : 3200);
 }
 
+let sheetReturnFocus = null;
 function openSheet(html, mount) {
+  const back = document.activeElement;
   closeSheet();
+  sheetReturnFocus = back && back !== document.body ? back : null;
   const ov = document.createElement('div');
   ov.className = 'overlay';
-  ov.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+  ov.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" tabindex="-1"><div class="grab"></div>${html}</div>`;
   ov.addEventListener('click', (e) => {
     if (e.target === ov) closeSheet();
   });
   document.body.appendChild(ov);
   document.body.style.overflow = 'hidden';
-  mount && mount($('.sheet', ov));
+  const sheet = $('.sheet', ov);
+  mount && mount(sheet);
+  const title = $('h2', sheet);
+  if (title) {
+    title.id = 'sheet-title';
+    sheet.setAttribute('aria-labelledby', 'sheet-title');
+  }
+  sheet.focus({ preventScroll: true });
   return ov;
 }
 function closeSheet() {
-  $$('.overlay').forEach((o) => o.remove());
+  const had = $$('.overlay');
+  had.forEach((o) => o.remove());
   document.body.style.overflow = '';
+  if (had.length && sheetReturnFocus && document.contains(sheetReturnFocus)) sheetReturnFocus.focus({ preventScroll: true });
+  sheetReturnFocus = null;
 }
-document.addEventListener('keydown', (e) => e.key === 'Escape' && closeSheet());
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const lb = $('.lightbox');
+  if (lb) lb.remove();
+  else closeSheet();
+});
 
 function confirmSheet({ title, text, ok = 'Да', danger = false }) {
   return new Promise((resolve) => {
@@ -1108,7 +1126,7 @@ function viewSettings(v) {
           <div class="pr-name"><div style="font-weight:600">${h(t.name)}</div>${
             promoOn(t) ? `<div class="hot-tag" style="margin-top:4px">🔥 ${unitLabel(t, t.promo.price)} · ${promoUntil(t)}</div>` : ''
           }</div>
-          <div class="row" style="gap:6px;white-space:nowrap"><input class="input small num" name="price-${t.id}" value="${t.price}" inputmode="decimal"><span class="unit">${
+          <div class="row" style="gap:6px;white-space:nowrap"><input class="input small num" name="price-${t.id}" value="${t.price}" inputmode="decimal" aria-label="Цена: ${h(t.name)}"><span class="unit">${
             t.type === 'hourly' ? '₪/ч' : t.type === 'percent' ? '%' : '₪'
           }</span><button type="button" class="flame ${promoOn(t) ? 'on' : ''}" data-promo="${h(t.id)}" title="Горящее предложение" aria-label="Горящее предложение">🔥</button></div>
           <div class="opts">
@@ -1438,6 +1456,8 @@ function bindExpenseActions(v) {
         e.preventDefault();
         const lb = document.createElement('div');
         lb.className = 'lightbox';
+        lb.setAttribute('role', 'dialog');
+        lb.setAttribute('aria-label', 'Фото чека');
         lb.innerHTML = `<img src="/api/receipts/${h(b.dataset.photo)}" alt="Фото чека"><button class="btn" aria-label="Закрыть">Закрыть</button>`;
         lb.onclick = () => lb.remove();
         document.body.appendChild(lb);
@@ -1603,7 +1623,7 @@ function openExpenseSheet(prefill = {}) {
           .map((p, i) => `<span class="thumb"><img src="${p}" alt=""><button type="button" data-rmphoto="${i}" aria-label="Убрать фото">${I.x}</button></span>`)
           .join('')}${
       st.photos.length < 3
-        ? `<label class="thumb add">📷<span>Добавить</span><input type="file" accept="image/*" multiple data-file hidden></label>`
+        ? `<label class="thumb add">📷<span>Добавить</span><input type="file" accept="image/*" multiple data-file class="sr-only"></label>`
         : ''
     }</div></div>
       <label class="field"><span>Комментарий для ${h(parentName())} (необязательно)</span><textarea class="input" data-note maxlength="300">${h(st.note)}</textarea></label>
